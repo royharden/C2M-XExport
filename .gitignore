@@ -1,0 +1,23 @@
+# Agent scratch/planning space (per PJ-OD ai-first framework)
+.agent-work/
+.thinking/
+
+# Chat exports produced while testing the tool itself
+.chatexports/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+
+# uv
+uv.lock
+
+# OS / editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store

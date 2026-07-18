@@ -1,0 +1,41 @@
+{% macro pagination(current, total, index_current=false) -%}
+<div class="pagination">
+{% if index_current %}<span class="current">Index</span>{% else %}<a href="index.html" class="index-link">Index</a>{% endif %}
+{% if current > 1 %}<a href="page-{{ '%03d' % (current - 1) }}.html">&larr; Prev</a>{% elif not index_current %}<span class="disabled">&larr; Prev</span>{% endif %}
+{% for n in range(1, total + 1) %}
+{% if n == current and not index_current %}<span class="current">{{ n }}</span>{% else %}<a href="page-{{ '%03d' % n }}.html">{{ n }}</a>{% endif %}
+{% endfor %}
+{% if current < total %}<a href="page-{{ '%03d' % (current + 1) }}.html">Next &rarr;</a>{% elif index_current and total >= 1 %}<a href="page-001.html">Next &rarr;</a>{% else %}<span class="disabled">Next &rarr;</span>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro timestamp(anchor, ts) -%}
+{% if ts %}<a href="#msg-{{ anchor }}" class="timestamp-link"><time datetime="{{ ts }}" data-timestamp="{{ ts }}">{{ ts }}</time></a>{% endif %}
+{%- endmacro %}
+
+{% macro truncatable_pre(text, css_class="") -%}
+<div class="truncatable"><div class="truncatable-content"><pre{% if css_class %} class="{{ css_class }}"{% endif %}>{{ text }}</pre></div><button class="expand-btn">Show more</button></div>
+{%- endmacro %}
+
+{% macro message(view) -%}
+<div class="message {{ view.css }}" id="msg-{{ view.anchor }}"><div class="message-header"><span class="role-label">{{ view.label }}</span>{{ timestamp(view.anchor, view.ts) }}</div><div class="message-content">
+{% for b in view.blocks %}
+{% if b.kind == 'user_text' %}
+<div class="user-content">{{ b.text|md }}</div>
+{% elif b.kind == 'assistant_text' %}
+<div class="assistant-text">{{ b.text|md }}</div>
+{% elif b.kind == 'thinking' %}
+<div class="thinking"><div class="thinking-label">Thinking</div>{{ b.text|md }}</div>
+{% elif b.kind == 'tool_call' %}
+<div class="tool-use"><div class="tool-header"><span class="tool-icon">{{ tool_icon(b.name) }}</span> {{ b.name }}</div>
+{% if b.detail %}<div class="tool-description">{{ b.detail }}</div>{% endif %}
+{% if b.args %}{{ truncatable_pre(b.args, "json") }}{% endif %}
+</div>
+{% elif b.kind == 'tool_result' %}
+<div class="tool-result{% if b.is_error %} tool-error{% endif %}">{{ truncatable_pre(b.output if b.output.strip() else "(empty)") }}</div>
+{% elif b.kind == 'raw' %}
+<details class="raw-entry"><summary>{{ b.name or 'entry' }} (raw)</summary><pre class="json">{{ b.text }}</pre></details>
+{% endif %}
+{% endfor %}
+</div></div>
+{%- endmacro %}

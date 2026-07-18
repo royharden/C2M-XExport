@@ -1,0 +1,34 @@
+[project]
+name = "xexport"
+version = "0.1.0"
+description = "Export Claude Code and Codex (ChatGPT/Codex CLI) sessions to paginated HTML or Markdown transcripts"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Roy Harden" }]
+dependencies = [
+    "click>=8.1",
+    "jinja2>=3.1",
+    "mistune>=3.0",
+]
+
+[project.scripts]
+xexport = "xexport.cli:main"
+
+[project.urls]
+Repository = "https://github.com/royharden/C2M-XExport"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/xexport"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

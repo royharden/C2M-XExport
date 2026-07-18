@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block title %}{{ session.title }}{% endblock %}
+{% block content %}
+        <h1>{{ session.title }}</h1>
+        <p class="subtitle">{{ session.app }} transcript{% if session.cwd %} · <code>{{ session.cwd }}</code>{% endif %}</p>
+        {{ m.pagination(0, total_pages, index_current=true) }}
+        <p style="color: var(--text-muted); margin-bottom: 24px;">{{ stats.prompts }} prompts · {{ stats.messages }} messages · {{ stats.tool_calls }} tool calls · {{ total_pages }} page{{ 's' if total_pages != 1 }}</p>
+        {% for item in index_items %}
+<div class="index-item"><a href="{{ item.href }}"><div class="index-item-header"><span class="index-item-number">#{{ item.number }}</span>{% if item.ts %}<time datetime="{{ item.ts }}" data-timestamp="{{ item.ts }}">{{ item.ts }}</time>{% endif %}</div><div class="index-item-content">{{ item.prompt_html }}</div></a>{% if item.stats_line or item.long_html %}<div class="index-item-stats">{% if item.stats_line %}<span>{{ item.stats_line }}</span>{% endif %}
+{% if item.long_html %}<div class="index-item-long-text"><div class="truncatable"><div class="truncatable-content"><div class="index-item-long-text-content">{{ item.long_html }}</div></div><button class="expand-btn">Show more</button></div></div>{% endif %}
+</div>{% endif %}</div>
+        {% endfor %}
+        {{ m.pagination(0, total_pages, index_current=true) }}
+{% endblock %}

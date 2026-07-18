@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block title %}{{ session.title }} — page {{ number }}/{{ total_pages }}{% endblock %}
+{% block content %}
+        <h1><a href="index.html" style="color: inherit; text-decoration: none;">{{ session.title }}</a> — page {{ number }}/{{ total_pages }}</h1>
+        {{ m.pagination(number, total_pages) }}
+        {% for view in messages %}
+{{ m.message(view) }}
+        {% endfor %}
+        {{ m.pagination(number, total_pages) }}
+{% endblock %}
