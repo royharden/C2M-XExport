@@ -39,19 +39,23 @@ class Message:
 
 @dataclass
 class Session:
-    source: str  # "claude" | "codex"
+    source: str  # "claude" | "codex" | "cursor"
     session_id: str
     path: Path | None = None
     title: str = ""
     cwd: str = ""
     started: str = ""
     model: str = ""
-    app: str = ""  # e.g. "Claude Code", "Codex Desktop", "Codex CLI"
+    app: str = ""  # e.g. "Claude Code", "Codex Desktop", "Codex CLI", "Cursor"
     messages: list[Message] = field(default_factory=list)
 
     @property
     def assistant_label(self) -> str:
-        return "Claude" if self.source == "claude" else "Codex"
+        return {
+            "claude": "Claude",
+            "codex": "Codex",
+            "cursor": "Cursor",
+        }.get(self.source, self.source.title() or "Assistant")
 
     def is_prompt(self, m: Message) -> bool:
         return m.role == "user" and any(b.kind == USER_TEXT for b in m.blocks)

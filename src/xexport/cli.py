@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import webbrowser
@@ -15,8 +16,10 @@ from . import __version__, detect
 from .model import Session
 from .render.html import render_html
 from .render.markdown import render_markdown
-from .sources import claude, codex
+from .sources import claude, codex, cursor
 from .titles import sanitize_title, unique_path
+
+_SOURCE_CHOICES = ["auto", "claude", "codex", "cursor"]
 
 
 def _utf8_stdout() -> None:
@@ -28,13 +31,21 @@ def _utf8_stdout() -> None:
 
 
 def _sniff_source(path: Path) -> str:
-    """A rollout file starts with a session_meta line; Claude files don't."""
+    """Guess store from path layout or first-line shape."""
+    parts = {p.lower() for p in path.parts}
+    if "agent-transcripts" in parts:
+        return "cursor"
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             first = f.readline()
         obj = json.loads(first)
         if isinstance(obj, dict) and obj.get("type") == "session_meta":
             return "codex"
+        if isinstance(obj, dict) and obj.get("role") in ("user", "assistant"):
+            # Cursor agent transcripts use role at the top level.
+            msg = obj.get("message")
+            if isinstance(msg, dict) and "content" in msg and "type" not in obj:
+                return "cursor"
     except (OSError, json.JSONDecodeError, ValueError):
         pass
     return "claude"
@@ -45,6 +56,8 @@ def _parse(path: Path, source: str) -> Session:
         source = _sniff_source(path)
     if source == "codex":
         return codex.parse_file(path)
+    if source == "cursor":
+        return cursor.parse_file(path)
     return claude.parse_file(path)
 
 
@@ -61,6 +74,10 @@ def _resolve_ref(ref: str, source: str) -> tuple[Path, str]:
         p = codex.find_session(ref)
         if p:
             found.append((p, "codex"))
+    if source in ("auto", "cursor"):
+        p = cursor.find_session(ref)
+        if p:
+            found.append((p, "cursor"))
     if not found:
         raise click.ClickException(
             f"No session matching {ref!r} found"
@@ -68,7 +85,7 @@ def _resolve_ref(ref: str, source: str) -> tuple[Path, str]:
             + ". Try `xexport list`."
         )
     if len(found) > 1:
-        click.echo(f"Note: {ref!r} matches sessions in both stores; using "
+        click.echo(f"Note: {ref!r} matches sessions in multiple stores; using "
                    f"{found[0][1]}. Pass --source to override.", err=True)
     return found[0]
 
@@ -119,7 +136,7 @@ def _export(session: Session, *, fmt: str, out: str | None, name: str | None,
 
 
 def common_options(f):
-    f = click.option("--source", type=click.Choice(["auto", "claude", "codex"]),
+    f = click.option("--source", type=click.Choice(_SOURCE_CHOICES),
                      default="auto", show_default=True,
                      help="Which session store to use.")(f)
     f = click.option("--format", "fmt",
@@ -163,7 +180,7 @@ class ExportFallbackGroup(click.Group):
 @click.pass_context
 def main(ctx, limit, source, fmt, out, name, brief, no_tools, no_thinking,
          full, copy_json, open_after):
-    """Export Claude Code / Codex chat sessions to HTML or Markdown.
+    """Export Claude Code / Codex / Cursor chat sessions to HTML or Markdown.
 
     Run with no arguments for an interactive picker, or see:
     xexport current / xexport list / xexport <session-id>
@@ -189,6 +206,8 @@ def _gather(source: str, limit: int):
         infos.extend(claude.list_sessions(limit))
     if source in ("auto", "codex"):
         infos.extend(codex.list_sessions(limit))
+    if source in ("auto", "cursor"):
+        infos.extend(cursor.list_sessions(limit))
     infos.sort(key=lambda i: i.mtime, reverse=True)
     return infos[:limit]
 
@@ -204,11 +223,11 @@ def _print_table(infos) -> None:
 
 
 @main.command("list")
-@click.option("--source", type=click.Choice(["auto", "claude", "codex"]),
+@click.option("--source", type=click.Choice(_SOURCE_CHOICES),
               default="auto", show_default=True)
 @click.option("--limit", default=15, show_default=True)
 def list_cmd(source, limit):
-    """List recent sessions across both stores."""
+    """List recent sessions across supported stores."""
     _utf8_stdout()
     infos = _gather(source, limit)
     if not infos:
@@ -218,7 +237,7 @@ def list_cmd(source, limit):
 
 @main.command()
 @click.option("--session-id", default=None,
-              help="Exact session id (the Claude skill passes this).")
+              help="Exact session id. Use this to select a specific session.")
 @common_options
 def current(session_id, source, fmt, out, name, brief, no_tools, no_thinking,
             full, copy_json, open_after):
@@ -227,6 +246,15 @@ def current(session_id, source, fmt, out, name, brief, no_tools, no_thinking,
     cwd = Path.cwd()
     if session_id:
         path, found_source = _resolve_ref(session_id, source)
+    elif source in ("auto", "cursor") and (conv_id := os.environ.get(
+            "CURSOR_CONVERSATION_ID", "").strip()):
+        # Cursor agent shells expose the active conversation id.
+        path, found_source = _resolve_ref(conv_id, "cursor")
+    elif source in ("auto", "codex") and (thread_id := os.environ.get(
+            "CODEX_THREAD_ID", "").strip()):
+        # Codex Desktop exposes the active task id. Prefer it over the shared
+        # workspace heuristic so concurrent tasks cannot export each other.
+        path, found_source = _resolve_ref(thread_id, "codex")
     else:
         path, found_source = _detect_current(cwd, source)
     session = _parse(path, found_source)
@@ -245,6 +273,10 @@ def _detect_current(cwd: Path, source: str) -> tuple[Path, str]:
         p, matched = detect.detect_codex(cwd)
         if p:
             candidates.append((p, "codex", matched))
+    if source in ("auto", "cursor"):
+        p, matched = detect.detect_cursor(cwd)
+        if p:
+            candidates.append((p, "cursor", matched))
     if not candidates:
         raise click.ClickException(
             "Could not find a session for this directory. "
@@ -255,8 +287,9 @@ def _detect_current(cwd: Path, source: str) -> tuple[Path, str]:
     pool.sort(key=lambda c: c[0].stat().st_mtime, reverse=True)
     path, found_source, was_confirmed = pool[0]
     if not was_confirmed:
-        click.echo(f"Note: no session matched this directory exactly; "
-                   f"using the newest {found_source} session: {path.name}",
+        click.echo(f"Note: could not identify the active session exactly; "
+                   f"using the newest {found_source} session: {path.name}. "
+                   "Pass --session-id to choose explicitly.",
                    err=True)
     return path, found_source
 

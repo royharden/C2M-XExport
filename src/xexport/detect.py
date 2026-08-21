@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from .sources import claude, codex
+from .sources import claude, codex, cursor
 
 
 def _norm(p: str | Path) -> str:
@@ -49,9 +49,15 @@ def detect_claude(cwd: str | Path) -> tuple[Path | None, bool]:
 
 
 def detect_codex(cwd: str | Path, scan_limit: int = 30) -> tuple[Path | None, bool]:
-    """Newest rollout whose session_meta.cwd matches; else newest overall.
+    """Fallback to the newest rollout whose session_meta.cwd matches.
 
-    Returns (path, cwd_matched).
+    A working directory is shared by concurrent Codex tasks, so even a cwd match
+    is only a heuristic, not confirmation of the active task. ``current`` uses
+    ``CODEX_THREAD_ID`` when Codex Desktop exposes it; this helper remains for
+    manual environments that do not have that variable.
+
+    Returns (path, active_session_confirmed), where the second value is always
+    False for this fallback.
     """
     files: list[Path] = []
     sessions_root = codex.codex_home() / "sessions"
@@ -70,5 +76,29 @@ def detect_codex(cwd: str | Path, scan_limit: int = 30) -> tuple[Path | None, bo
         except (json.JSONDecodeError, OSError, ValueError):
             continue
         if meta_cwd and _norm(meta_cwd) == _norm(cwd):
-            return p, True
+            return p, False
     return files[0], False
+
+
+def detect_cursor(cwd: str | Path) -> tuple[Path | None, bool]:
+    """Newest agent transcript for this cwd's encoded Cursor project folder.
+
+    ``CURSOR_CONVERSATION_ID`` is preferred by ``current`` when present; this
+    helper is the cwd heuristic fallback. Returns (path, confirmed) where
+    confirmed is always False for this heuristic.
+    """
+    proj = cursor.projects_dir() / cursor.encode_project_dir(cwd)
+    transcripts = proj / "agent-transcripts"
+    if not transcripts.is_dir():
+        return None, False
+    candidates: list[Path] = []
+    for folder in transcripts.iterdir():
+        if not folder.is_dir():
+            continue
+        path = folder / f"{folder.name}.jsonl"
+        if path.is_file():
+            candidates.append(path)
+    if not candidates:
+        return None, False
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0], False

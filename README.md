@@ -1,11 +1,12 @@
 # C2M-XExport
 
-Export **Claude Code** and **Codex** (Codex CLI / ChatGPT desktop) chat sessions to
-**paginated HTML** or **Markdown** transcripts — from inside the chat via the
-`xexport-html` / `xexport-md` skills, or from any terminal via the `xexport` CLI.
+Export **Claude Code**, **Codex** (Codex CLI / ChatGPT desktop), and **Cursor**
+Agent chat sessions to **paginated HTML** or **Markdown** transcripts — from
+inside the chat via the `xexport-html` / `xexport-md` skills, or from any
+terminal via the `xexport` CLI.
 
 Exports land in `<project-root>\.chatexports\<chat title>` by default, named after the
-chat title shown in the apps.
+chat title shown in the apps (Cursor uses the first user prompt as the title).
 
 ## Install
 
@@ -19,18 +20,18 @@ uv tool install --force -e .
 ## CLI usage
 
 ```text
-xexport                       # interactive picker across Claude + Codex sessions
-xexport current               # export the session you're inside (auto-detects source)
+xexport                       # interactive picker across Claude + Codex + Cursor
+xexport current               # export the active session (CURSOR_CONVERSATION_ID / CODEX_THREAD_ID)
 xexport list                  # recent sessions: title, id, date, source
-xexport <session-id>          # export a specific session (either source)
+xexport <session-id>          # export a specific session (any source)
 xexport <path\to\file.jsonl>  # export a transcript file directly
 
 Options:
-  --source claude|codex|auto   which store to look in           (default: auto)
+  --source claude|codex|cursor|auto   which store to look in     (default: auto)
   --format html|md|both        output format                    (default: html)
   --out DIR                    output directory                 (default: .\.chatexports)
   --name NAME                  override the export name         (default: chat title)
-  --session-id ID              exact session id (used by the Claude skill)
+  --session-id ID              exact session id (use to force a specific export)
   --brief                      user + assistant text only (no tools / thinking)
   --no-tools / --no-thinking   granular filtering
   --full                       disable truncation of long tool output
@@ -49,6 +50,7 @@ Output shapes:
 ## In-chat usage
 
 - **Claude Code** (CLI, desktop, VS Code): `/xexport-html` or `/xexport-md`
+- **Cursor** (Agent): `/xexport-html` or `/xexport-md` (uses `CURSOR_CONVERSATION_ID`)
 - **Codex** (CLI, ChatGPT desktop): `$xexport-html` or `$xexport-md` (Codex invokes
   skills with `$name`; `/skills` lists them)
 
@@ -61,9 +63,16 @@ directory and are mirrored per-agent by the `sync-skills-across-agents` workflow
 |---|---|---|
 | Claude Code | `~\.claude\projects\<encoded-cwd>\<session-id>.jsonl` | last `ai-title` line in the transcript |
 | Codex | `~\.codex\sessions\YYYY\MM\DD\rollout-*.jsonl` (+ `archived_sessions`) | `~\.codex\session_index.jsonl` / `state_5.sqlite` |
+| Cursor | `~\.cursor\projects\<encoded-cwd>\agent-transcripts\<uuid>\<uuid>.jsonl` | first user prompt (wrappers stripped) |
 
-Both formats are internal to their apps and can change between releases. Parsers are
+Formats are internal to their apps and can change between releases. Parsers are
 defensive: unknown entry types become collapsed raw-JSON blocks instead of crashes.
+
+For Cursor Agent, `xexport current` uses `CURSOR_CONVERSATION_ID` when the shell
+exposes it. For Codex Desktop, it uses `CODEX_THREAD_ID`. This prevents another
+newer task in the same working directory from being exported. If that variable is
+unavailable, `current` warns that it is using a working-directory heuristic; use
+`--session-id` or `xexport list` in that case.
 
 ## Credits
 

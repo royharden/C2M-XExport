@@ -5,9 +5,9 @@ from __future__ import annotations
 from xexport.model import (
     ASSISTANT_TEXT, RAW, THINKING, TOOL_CALL, TOOL_RESULT, USER_TEXT,
 )
-from xexport.sources import claude, codex
+from xexport.sources import claude, codex, cursor
 
-from conftest import CLAUDE_SESSION_ID, CODEX_SESSION_ID
+from conftest import CLAUDE_SESSION_ID, CODEX_SESSION_ID, CURSOR_SESSION_ID
 
 
 def _kinds(session):
@@ -114,3 +114,47 @@ class TestCodexParser:
         answers = [b for m in s.messages for b in m.blocks
                    if b.kind == ASSISTANT_TEXT]
         assert answers and "3 tabs" in answers[0].text
+
+
+class TestCursorParser:
+    def test_parses_store_session(self, cursor_store):
+        path = cursor.find_session(CURSOR_SESSION_ID)
+        assert path is not None
+        s = cursor.parse_file(path)
+        assert s.source == "cursor"
+        assert s.session_id == CURSOR_SESSION_ID
+        assert s.app == "Cursor"
+        kinds = _kinds(s)
+        assert ("user", USER_TEXT) in kinds
+        assert ("assistant", TOOL_CALL) in kinds
+        assert ("tool", TOOL_RESULT) in kinds
+        assert ("assistant", ASSISTANT_TEXT) in kinds
+
+    def test_strips_user_query_wrapper(self, cursor_store):
+        # what_bug_this_catches: Cursor harness wraps prompts in <user_query>
+        # and timestamps; those must not appear as transcript noise
+        s = cursor.parse_file(cursor.find_session(CURSOR_SESSION_ID))
+        prompts = [b.text for m in s.messages for b in m.blocks if b.kind == USER_TEXT]
+        assert prompts[0] == "Export this Cursor chat as Markdown please."
+        assert "user_query" not in prompts[0]
+        assert "timestamp" not in prompts[0].lower()
+
+    def test_title_from_first_prompt(self, cursor_store):
+        s = cursor.parse_file(cursor.find_session(CURSOR_SESSION_ID))
+        assert s.title == "Export this Cursor chat as Markdown please"
+
+    def test_listing_skips_subagents(self, cursor_store):
+        infos = cursor.list_sessions()
+        assert len(infos) == 1
+        assert infos[0].session_id == CURSOR_SESSION_ID
+        assert "subagent" not in infos[0].title.lower()
+
+    def test_encode_project_dir(self):
+        assert (
+            cursor.encode_project_dir(r"C:\Users\Roy Harden\OneDrive\PJ-OD\skills")
+            == "c-Users-Roy-Harden-OneDrive-PJ-OD-skills"
+        )
+
+    def test_prompt_groups(self, cursor_store):
+        s = cursor.parse_file(cursor.find_session(CURSOR_SESSION_ID))
+        assert len(s.prompt_groups()) == 2

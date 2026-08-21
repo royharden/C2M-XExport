@@ -1,8 +1,6 @@
 ---
 name: xexport-html
-description: Export the current chat session to a paginated HTML transcript in .chatexports/<chat title>/ using the xexport CLI. Use when the user runs /xexport-html (Claude Code) or $xexport-html (Codex), or asks to export, save, or archive this chat/session/conversation as HTML.
-argument-hint: "[output-dir]"
-allowed-tools: ["Bash"]
+description: Export the current chat session to a paginated HTML transcript under .chatexports using the xexport CLI. Use when the user runs /xexport-html (Claude Code or Cursor), $xexport-html (Codex), or asks to export, save, or archive this chat/session/conversation as HTML. In Codex use CODEX_THREAD_ID; in Cursor use CURSOR_CONVERSATION_ID.
 ---
 
 # xexport-html
@@ -14,23 +12,41 @@ claude-code-transcripts visual style) via the `xexport` CLI from
 ## Steps
 
 1. Output directory: `$ARGUMENTS` if the user passed one, else the project
-   root's `.chatexports` folder (in Claude Code that is
-   `${CLAUDE_PROJECT_DIR}\.chatexports`; in Codex use `<workspace root>\.chatexports`).
+   root's `.chatexports` folder (Claude Code: `${CLAUDE_PROJECT_DIR}\.chatexports`;
+   Codex / Cursor: `<workspace root>\.chatexports`).
 2. Pick the command for your harness:
    - **Claude Code** — the placeholder on the next line is auto-substituted with
      the real session id. If it still looks like a literal `${...}` placeholder,
-     you are NOT running in Claude Code; use the Codex form instead.
+     you are NOT running in Claude Code; use the Cursor or Codex form instead.
 
      ```
      xexport current --source claude --session-id ${CLAUDE_SESSION_ID} --format html --out "<output-dir>"
      ```
 
-   - **Codex** (CLI or desktop) — current-session detection matches the newest
-     rollout for this working directory:
+   - **Cursor** (Agent / IDE) — resolve the active conversation id from
+     `CURSOR_CONVERSATION_ID` (`$env:CURSOR_CONVERSATION_ID` in PowerShell or
+     `$CURSOR_CONVERSATION_ID` in a POSIX shell). Pass it explicitly.
 
      ```
-     xexport current --source codex --format html --out "<output-dir>"
+     xexport current --source cursor --session-id "<CURSOR_CONVERSATION_ID>" --format html --out "<output-dir>"
      ```
+
+     If `CURSOR_CONVERSATION_ID` is absent, do not guess. Run
+     `xexport list --source cursor` and ask the user to identify the intended
+     session id.
+
+   - **Codex** (CLI or desktop) — resolve the active task id from
+     `CODEX_THREAD_ID` (`$env:CODEX_THREAD_ID` in PowerShell or
+     `$CODEX_THREAD_ID` in a POSIX shell). Pass it explicitly. Do **not** select
+     the newest rollout for the working directory: several Codex tasks can share
+     that directory.
+
+     ```
+     xexport current --source codex --session-id "<CODEX_THREAD_ID>" --format html --out "<output-dir>"
+     ```
+
+     If `CODEX_THREAD_ID` is absent, do not guess. Run `xexport list --source codex`
+     and ask the user to identify the intended session id.
 
 3. If `xexport` is not on PATH, use the repo directly:
 
@@ -38,9 +54,9 @@ claude-code-transcripts visual style) via the `xexport` CLI from
    uv run --project "C:\Users\Roy Harden\OneDrive\PJ-OD\C2M\C2M-XExport" xexport current ...
    ```
 
-4. Relay the "wrote:" paths from the output to the user. The export is a
-   snapshot up to the moment the command runs; the turn invoking this skill is
-   only partially captured.
+4. Verify that the reported session id equals the requested id, then relay the
+   "wrote:" paths to the user. The export is a snapshot up to the moment the
+   command runs; the turn invoking this skill is only partially captured.
 
 ## Notes
 

@@ -1,17 +1,19 @@
 # AGENTS.md — C2M-XExport
 
-Python CLI (`xexport`) + agent skills that export Claude Code and Codex chat sessions
-to paginated HTML or Markdown. Sibling of the C2M Chat-to-Markdown Chrome extension
-(same mission, different surface: local session stores instead of browser DOM).
+Python CLI (`xexport`) + agent skills that export Claude Code, Codex, and Cursor Agent
+chat sessions to paginated HTML or Markdown. Sibling of the C2M Chat-to-Markdown
+Chrome extension (same mission, different surface: local session stores instead of
+browser DOM).
 
 ## Ground rules
 
 - Committed docs are lean and stable: README.md, this file, NOTICE, LESSONS.md.
   Agent-only plans, reviews, scratch memory, and generated indexes go in gitignored
   `.agent-work/`. No second truths.
-- Recon before edit: the parsed formats (`~\.claude\projects\*.jsonl`, Codex rollout
-  jsonl) are **internal and version-drifting**. Before changing a parser, re-verify the
-  live format on this machine; fixtures in `tests/fixtures/` pin the currently observed
+- Recon before edit: the parsed formats (Claude `~\.claude\projects\*.jsonl`, Codex
+  rollout jsonl, Cursor `~\.cursor\projects\*\agent-transcripts\*\*.jsonl`) are
+  **internal and version-drifting**. Before changing a parser, re-verify the live
+  format on this machine; fixtures in `tests/fixtures/` pin the currently observed
   shape so drift shows up as a failing test.
 - Every file open uses `encoding="utf-8"` (reads: `errors="replace"`). Never rely on
   the Windows default codepage — that's the cp1252 crash class this tool exists to avoid.
@@ -21,7 +23,8 @@ to paginated HTML or Markdown. Sibling of the C2M Chat-to-Markdown Chrome extens
 ## Layout
 
 - `src/xexport/model.py` — neutral IR (Session/Message/Block). Parse once, render twice.
-- `src/xexport/sources/` — `claude.py`, `codex.py`: store discovery, title resolution, jsonl → IR.
+- `src/xexport/sources/` — `claude.py`, `codex.py`, `cursor.py`: store discovery, title
+  resolution, jsonl → IR.
 - `src/xexport/render/` — `markdown.py`; `html.py` + `templates/` (adapted from
   claude-code-transcripts, Apache-2.0 — keep the NOTICE attribution).
 - `src/xexport/titles.py` — Windows-safe name sanitization; `detect.py` — current-session detection.

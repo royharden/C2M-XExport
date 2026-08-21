@@ -1,7 +1,7 @@
 [project]
 name = "xexport"
-version = "0.1.0"
-description = "Export Claude Code and Codex (ChatGPT/Codex CLI) sessions to paginated HTML or Markdown transcripts"
+version = "0.1.1"
+description = "Export Claude Code, Codex (ChatGPT/Codex CLI), and Cursor Agent sessions to paginated HTML or Markdown transcripts"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }

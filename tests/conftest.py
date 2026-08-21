@@ -9,6 +9,7 @@ import pytest
 
 CLAUDE_SESSION_ID = "11111111-2222-3333-4444-555555555555"
 CODEX_SESSION_ID = "019f0000-aaaa-bbbb-cccc-dddddddddddd"
+CURSOR_SESSION_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 
 def _jsonl(path: Path, entries: list[dict]) -> Path:
@@ -106,6 +107,37 @@ def codex_entries() -> list[dict]:
     ]
 
 
+def cursor_entries() -> list[dict]:
+    return [
+        {"role": "user", "message": {"content": [
+            {"type": "text", "text": (
+                "<timestamp>Thursday, Aug 20, 2026, 3:34 PM (UTC-4)</timestamp>\n"
+                "<user_query>\nExport this Cursor chat as Markdown please.\n</user_query>"
+            )},
+        ]}},
+        {"role": "assistant", "message": {"content": [
+            {"type": "text", "text": "I'll run xexport for this conversation."},
+            {"type": "tool_use", "name": "Shell",
+             "input": {"command": "xexport current --source cursor --format md",
+                       "description": "Export current Cursor chat"}},
+        ]}},
+        {"role": "assistant", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_1",
+             "content": "wrote: .chatexports\\Export this Cursor chat.md",
+             "is_error": False},
+        ]}},
+        {"role": "assistant", "message": {"content": [
+            {"type": "text", "text": "Done — exported the transcript."},
+        ]}},
+        {"role": "user", "message": {"content": [
+            {"type": "text", "text": "<user_query>\nThanks, also HTML?\n</user_query>"},
+        ]}},
+        {"role": "assistant", "message": {"content": [
+            {"type": "text", "text": "Sure."},
+        ]}},
+    ]
+
+
 @pytest.fixture
 def claude_store(tmp_path, monkeypatch):
     home = tmp_path / "claude-home"
@@ -125,4 +157,19 @@ def codex_store(tmp_path, monkeypatch):
            [{"id": CODEX_SESSION_ID, "thread_name": "Spreadsheet review chat",
              "updated_at": "2026-07-17T12:00:06Z"}])
     monkeypatch.setenv("XEXPORT_CODEX_HOME", str(home))
+    return home
+
+
+@pytest.fixture
+def cursor_store(tmp_path, monkeypatch):
+    home = tmp_path / "cursor-home"
+    proj = home / "projects" / "c-proj"
+    transcript = proj / "agent-transcripts" / CURSOR_SESSION_ID
+    _jsonl(transcript / f"{CURSOR_SESSION_ID}.jsonl", cursor_entries())
+    # Subagent noise must not appear in listings
+    _jsonl(transcript / "subagents" / "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl",
+           [{"role": "user", "message": {"content": [
+               {"type": "text", "text": "<user_query>\nsubagent only\n</user_query>"},
+           ]}}])
+    monkeypatch.setenv("XEXPORT_CURSOR_HOME", str(home))
     return home
