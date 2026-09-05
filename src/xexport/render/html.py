@@ -142,4 +142,13 @@ def render_html(session: Session, out_dir: Path) -> Path:
                             stats=session.stats(), **common)
     index_path = out_dir / "index.html"
     index_path.write_text(html, encoding="utf-8")
+
+    # Re-rendering into an existing folder (--mode append/replace): drop pages left
+    # over from a previous, longer render so nothing stale stays linkable.
+    for stale in out_dir.glob("page-*.html"):
+        try:
+            if int(stale.stem.split("-")[1]) > total_pages:
+                stale.unlink()
+        except (ValueError, IndexError, OSError):
+            continue
     return index_path

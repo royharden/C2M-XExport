@@ -3,6 +3,10 @@
 Shape follows the codex-export style Roy liked (## 👤 / 🤖 headings), with
 collapsible <details> for thinking and tool output so long sessions stay
 skimmable on GitHub/Obsidian.
+
+0.2.0: the body can start part-way through a session (`start_index`) and the file
+header can be omitted, so a later run appends only its new turns to an export that
+already exists.
 """
 
 from __future__ import annotations
@@ -32,24 +36,14 @@ def _truncate(text: str, limit: int) -> str:
     return f"{text[:limit]}\n… (+{len(text) - limit:,} chars truncated — use --full for everything)"
 
 
-def render_markdown(
-    session: Session,
-    *,
-    brief: bool = False,
-    include_tools: bool = True,
-    include_thinking: bool = True,
-    truncate: int = 2000,
-) -> str:
-    if brief:
-        include_tools = False
-        include_thinking = False
-
-    label = session.assistant_label
-    lines: list[str] = [f"# {session.title}", ""]
+def _header_lines(session: Session) -> list[str]:
+    lines = [f"# {session.title}", ""]
     meta = [f"- **Source:** {session.app or session.source}"]
     if session.model:
         meta[0] += f" ({session.model})"
     meta.append(f"- **Session:** `{session.session_id}`")
+    if session.is_subagent and session.parent_session_id:
+        meta.append(f"- **Subagent of:** `{session.parent_session_id}`")
     if session.cwd:
         meta.append(f"- **Workspace:** `{session.cwd}`")
     if session.started:
@@ -60,8 +54,71 @@ def render_markdown(
     )
     lines.extend(meta)
     lines.extend(["", "---", ""])
+    return lines
 
-    for message in session.messages:
+
+def describe_delta(session: Session, start_index: int, end_index: int) -> str:
+    """Human summary of an appended range.
+
+    A delta often contains no new *prompt* at all — a long turn of tool work appends
+    plenty of content without the user having said anything. "0 new prompts" is both
+    wrong-sounding and uninformative, so the unit switches to messages in that case.
+    """
+    prompts = sum(
+        1 for m in session.messages[start_index:end_index] if session.is_prompt(m)
+    )
+    span = f"messages {start_index + 1}–{end_index}"
+    if prompts:
+        return f"{prompts} new prompt{'' if prompts == 1 else 's'} ({span})"
+    count = end_index - start_index
+    return f"{count} new message{'' if count == 1 else 's'} ({start_index + 1}–{end_index})"
+
+
+def addendum_header(
+    session: Session,
+    *,
+    run: int,
+    start_index: int,
+    end_index: int,
+    previous_title: str = "",
+) -> str:
+    """The seam between an existing export and the turns appended after it.
+
+    An h2 so it lands in a table of contents alongside the ## 👤 User headings. The
+    title sentence appears only when the chat was actually renamed since the last run,
+    which is how a retitle gets recorded without renaming the file (and without
+    rewriting the header block at the top).
+    """
+    when = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    note = f"*{describe_delta(session, start_index, end_index)}.*"
+    if previous_title and previous_title != session.title:
+        note = note[:-1] + f" Chat title is now \"{session.title}\".*"
+    return "\n".join([
+        "", "---", "",
+        f"## ➕ Addendum {run} · {when}",
+        "", note, "",
+        "---", "",
+    ])
+
+
+def render_markdown(
+    session: Session,
+    *,
+    brief: bool = False,
+    include_tools: bool = True,
+    include_thinking: bool = True,
+    truncate: int = 2000,
+    start_index: int = 0,
+    header: bool = True,
+) -> str:
+    if brief:
+        include_tools = False
+        include_thinking = False
+
+    label = session.assistant_label
+    lines: list[str] = _header_lines(session) if header else []
+
+    for message in session.messages[start_index:]:
         for block in message.blocks:
             if block.kind == USER_TEXT:
                 lines.extend([f"## 👤 User", "", block.text, ""])

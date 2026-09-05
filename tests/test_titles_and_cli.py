@@ -9,6 +9,15 @@ from xexport.titles import sanitize_title, unique_path
 
 from conftest import CLAUDE_SESSION_ID, CODEX_SESSION_ID, CURSOR_SESSION_ID, _jsonl, codex_entries
 
+# 0.2.0 names an export "{agent} -- {title} -- {identity}", where {identity} is
+# "<source>-<full session id>". These are the names the fixtures actually produce.
+CODEX_NAME = (f"Codex_GPT56-Terra -- Spreadsheet review chat "
+              f"-- codex-{CODEX_SESSION_ID}")
+CLAUDE_NAME = (f"Claude_Opus48 -- My Renamed Chat v2 "
+               f"-- claude-{CLAUDE_SESSION_ID}")
+CURSOR_NAME = (f"Cursor -- Export this Cursor chat as Markdown please "
+               f"-- cursor-{CURSOR_SESSION_ID}")
+
 
 class TestSanitize:
     def test_invalid_chars_removed(self):
@@ -45,16 +54,19 @@ class TestCli:
         result = CliRunner().invoke(
             main, [CODEX_SESSION_ID, "--format", "both", "--out", str(out)])
         assert result.exit_code == 0, result.output
-        folder = out / "Spreadsheet review chat"
-        assert (folder / "index.html").is_file()
-        assert (folder / "Spreadsheet review chat.md").is_file()
+        # 0.2.0: HTML lives under html\, and `both` puts the .md beside it at the
+        # root rather than nested inside the html folder.
+        assert (out / "html" / CODEX_NAME / "index.html").is_file()
+        assert (out / f"{CODEX_NAME}.md").is_file()
+        assert not (out / "html" / CODEX_NAME / f"{CODEX_NAME}.md").exists()
 
     def test_export_md_single_file(self, claude_store, codex_store, tmp_path):
         out = tmp_path / "exports"
         result = CliRunner().invoke(
             main, [CLAUDE_SESSION_ID, "--format", "md", "--out", str(out)])
         assert result.exit_code == 0, result.output
-        assert (out / "My Renamed Chat v2.md").is_file()  # sanitized title
+        # sanitized title + the agent prefix and id suffix added in 0.2.0
+        assert (out / f"{CLAUDE_NAME}.md").is_file()
 
     def test_current_with_session_id(self, claude_store, codex_store, tmp_path):
         out = tmp_path / "exports"
@@ -83,8 +95,8 @@ class TestCli:
                    "--out", str(out)])
 
         assert result.exit_code == 0, result.output
-        assert (out / "Spreadsheet review chat.md").is_file()
-        assert not (out / "Wrong newer task.md").exists()
+        assert (out / f"{CODEX_NAME}.md").is_file()
+        assert not list(out.glob("*Wrong newer task*.md"))
 
     def test_current_prefers_cursor_conversation_id(self, cursor_store, monkeypatch,
                                                      tmp_path):
@@ -107,8 +119,8 @@ class TestCli:
                    "--out", str(out)])
 
         assert result.exit_code == 0, result.output
-        assert list(out.glob("Export this Cursor chat*.md"))
-        assert not list(out.glob("Wrong newer Cursor chat*.md"))
+        assert (out / f"{CURSOR_NAME}.md").is_file()
+        assert not list(out.glob("*Wrong newer Cursor chat*.md"))
 
     def test_list_includes_cursor(self, cursor_store):
         result = CliRunner().invoke(main, ["list", "--source", "cursor"])
@@ -123,7 +135,16 @@ class TestCli:
         result = CliRunner().invoke(
             main, [str(path), "--format", "md", "--out", str(out)])
         assert result.exit_code == 0, result.output
-        assert (out / "Spreadsheet review chat.md").is_file()
+        assert (out / f"{CODEX_NAME}.md").is_file()
+
+    def test_name_template_pins_the_pre_0_2_0_names(self, claude_store, tmp_path):
+        """XEXPORT_NAME_TEMPLATE is the escape hatch promised in the README."""
+        out = tmp_path / "exports"
+        result = CliRunner().invoke(
+            main, [CLAUDE_SESSION_ID, "--format", "md", "--out", str(out),
+                   "--name-template", "{title}"])
+        assert result.exit_code == 0, result.output
+        assert (out / "My Renamed Chat v2.md").is_file()
 
     def test_unknown_ref_fails_cleanly(self, claude_store, codex_store):
         result = CliRunner().invoke(main, ["deadbeef-0000"])
