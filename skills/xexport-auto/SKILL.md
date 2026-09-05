@@ -202,6 +202,7 @@ optional flag.
 4. Back up that file, merge the hooks, restart the session, and confirm a file appears
    in `.chatexports\` after the next turn.
 5. Other harnesses: append the marked boot section to `AGENTS.md`.
-6. Run one subagent and confirm its transcript lands in `.chatexports\subagents\` — and
-   that the parent transcript did **not** get a second copy written there.
+6. Run one subagent and confirm its transcript lands in `.chatexports\` beside the main
+   exports, named `... -- claude-agent-<hex>.md` — and that the parent transcript did
+   **not** get a second copy written under that name.
 7. Follow `sync-skills-across-agents` if the project keeps skill mirrors.
