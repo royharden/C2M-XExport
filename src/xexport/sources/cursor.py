@@ -130,11 +130,16 @@ def parse_file(path: Path) -> Session:
         app="Cursor",
     )
     first_user_text = ""
+    if "subagents" in {p.lower() for p in path.parts}:
+        session.is_subagent = True
+        session.app = "Cursor subagent"
+        #  .../agent-transcripts/<conversation-id>/subagents/<file>.jsonl
+        session.parent_session_id = path.parent.parent.name
 
     # Infer cwd from the projects/<encoded>/agent-transcripts/... layout when possible.
     try:
-        # .../projects/<encoded>/agent-transcripts/<id>/<id>.jsonl
-        encoded = path.parent.parent.parent.name
+        # .../projects/<encoded>/agent-transcripts/<id>/[subagents/]<file>.jsonl
+        encoded = path.parents[3 if session.is_subagent else 2].name
         if encoded and encoded != "projects":
             session.cwd = encoded
     except IndexError:
@@ -288,7 +293,7 @@ def _quick_title(path: Path) -> str:
     return path.stem
 
 
-def _iter_transcript_files() -> list[Path]:
+def _iter_transcript_files(*, subagents: bool = False) -> list[Path]:
     root = projects_dir()
     if not root.is_dir():
         return []
@@ -299,11 +304,27 @@ def _iter_transcript_files() -> list[Path]:
             continue
         if _UUID_RE.match(p.stem) and p.parent.name.lower() == p.stem.lower():
             files.append(p)
+    if subagents:
+        files.extend(root.glob("*/agent-transcripts/*/subagents/*.jsonl"))
     return files
 
 
-def list_sessions(limit: int = 15) -> list[SessionInfo]:
-    files = _iter_transcript_files()
+def list_subagents(conversation_id: str) -> list[SessionInfo]:
+    root = projects_dir()
+    if not root.is_dir() or not conversation_id:
+        return []
+    files = sorted(
+        root.glob(f"*/agent-transcripts/{conversation_id}/subagents/*.jsonl")
+    )
+    return [
+        SessionInfo(source="cursor", session_id=p.stem, path=p,
+                    title=_quick_title(p), mtime=p.stat().st_mtime)
+        for p in files
+    ]
+
+
+def list_sessions(limit: int = 15, *, subagents: bool = False) -> list[SessionInfo]:
+    files = _iter_transcript_files(subagents=subagents)
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     infos: list[SessionInfo] = []
     for p in files[:limit]:
@@ -322,9 +343,12 @@ def find_session(session_id: str) -> Path | None:
     exact = list(root.glob(f"*/agent-transcripts/{sid}/{sid}.jsonl"))
     if exact:
         return exact[0]
+    nested = list(root.glob(f"*/agent-transcripts/*/subagents/{sid}.jsonl"))
+    if nested:
+        return nested[0]
     # Partial id match (first unique hit by mtime)
     matches = [
-        p for p in _iter_transcript_files()
+        p for p in _iter_transcript_files(subagents=True)
         if sid.lower() in p.stem.lower()
     ]
     if not matches:
