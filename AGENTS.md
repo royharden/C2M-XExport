@@ -19,6 +19,14 @@ browser DOM).
   the Windows default codepage — that's the cp1252 crash class this tool exists to avoid.
 - Unknown jsonl entry types must degrade to Raw blocks, never crash an export.
 - Bug fixed ⇒ regression test added, with a comment saying what bug it catches.
+- **Subagent transcripts are sidechains by definition.** Every line of
+  `...\<session>\subagents\agent-*.jsonl` carries `isSidechain: true`. The filter that
+  keeps a *parent* transcript clean must stay lifted for a subagent's own file — see
+  `claude.parse_file(include_sidechain=...)`. Getting this backwards produces an export
+  with zero messages and no error, which is how it went unnoticed until 0.2.0.
+- **Append never rewrites bytes already on disk.** Cursor markers accumulate; reading
+  takes the last one. If you find yourself wanting to rewrite the header of an existing
+  export, add a marker instead.
 
 ## Layout
 
@@ -28,8 +36,11 @@ browser DOM).
 - `src/xexport/render/` — `markdown.py`; `html.py` + `templates/` (adapted from
   claude-code-transcripts, Apache-2.0 — keep the NOTICE attribution).
 - `src/xexport/titles.py` — Windows-safe name sanitization; `detect.py` — current-session detection.
+- `src/xexport/naming.py` — export names: the `{agent} -- {title} -- {identity}` template
+  and AgentNamer callsign resolution. `cursors.py` — the append cursor recorded inside
+  each export.
 - `src/xexport/cli.py` — click CLI; console script `xexport`.
-- Skills: canonical copies live in `PJ-OD\skills\xexport-html|md\` (NOT in this repo);
+- Skills: canonical copies live in `PJ-OD\skills\xexport-html|md|auto\` (NOT in this repo);
   `skills/` here holds the templates they are generated from. Follow the
   `sync-skills-across-agents` skill for any skill change.
 
