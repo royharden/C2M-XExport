@@ -36,6 +36,11 @@ MARKER_RE = re.compile(r"<!--\s*xexport-cursor\s+v(\d+)\s+(\{.*?\})\s*-->", re.D
 
 
 # ------------------------------------------------------------------- fingerprints
+# Byte separators for content_digest, so that moving text between adjacent fields
+# cannot produce the same hash.
+_SEP_MESSAGE = b""
+_SEP_BLOCK = b""
+_SEP_FIELD = b""
 def _fingerprint(message: Message) -> str:
     block = message.blocks[0] if message.blocks else None
     text = ""
@@ -47,22 +52,32 @@ def _fingerprint(message: Message) -> str:
     return hashlib.sha1(payload.encode("utf-8", "replace")).hexdigest()[:12]
 
 
-def anchor_for(messages: list[Message], count: int) -> str:
-    """Fingerprint of the last message a previous export covered.
+def content_digest(session: Session) -> str:
+    """Fingerprint of everything an export would render from this session.
 
-    The cursor stores a message *count*, and append renders ``messages[count:]``. That
-    is only sound while the first `count` messages are still the same messages. These
-    stores are documented as internal and version-drifting, and a silently shifted
-    index would duplicate or lose turns.
+    Change detection for a re-render has to answer "is the document that would
+    be written the same as the one on disk", and a message *count* cannot: an
+    edited, retried or reordered turn leaves the count untouched. Every store
+    xexport reads is small and local, so hashing the whole conversation costs
+    microseconds and removes that blind spot rather than documenting it.
 
-    Limit, on purpose: this fingerprints only the boundary message, not the whole
-    history. A rewrite *behind* the cursor is invisible. Acceptable because every store
-    xexport reads is append-only, and hashing the full history every turn would cost
-    more than the failure it catches.
+    Deliberately covers the source content only. A rendered document carries an
+    "Exported:" timestamp that changes every run, so comparing rendered bytes
+    would never match; comparing what they are rendered from does.
     """
-    if count <= 0 or count > len(messages):
-        return ""
-    return _fingerprint(messages[count - 1])
+    h = hashlib.sha1()
+    h.update(f"{session.title}|{session.model}|{session.app}".encode("utf-8", "replace"))
+    for message in session.messages:
+        h.update(_SEP_MESSAGE)
+        h.update(f"{message.role}|{message.timestamp}".encode("utf-8", "replace"))
+        for block in message.blocks:
+            h.update(_SEP_BLOCK)
+            h.update(f"{block.kind}|{block.name}|{block.detail}|{block.is_error}"
+                     .encode("utf-8", "replace"))
+            for part in (block.text, block.args, block.output):
+                h.update(_SEP_FIELD)
+                h.update((part or "").encode("utf-8", "replace"))
+    return h.hexdigest()[:16]
 
 
 def options_fingerprint(*, brief: bool, include_tools: bool,
@@ -86,7 +101,7 @@ def make(session: Session, *, messages: int, run: int, opts: str = "") -> dict:
         "source": session.source,
         "messages": messages,
         "prompts": sum(1 for m in session.messages[:messages] if session.is_prompt(m)),
-        "anchor": anchor_for(session.messages, messages),
+        "digest": content_digest(session),
         "opts": opts,
         "run": run,
         "updated": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -107,7 +122,7 @@ def marker_line(data: dict) -> str:
 def read_md_marker(path: Path) -> dict | None:
     """Last marker in a Markdown export, read from the file's tail.
 
-    Adds a computed ``_trailing`` flag: bytes after the final marker mean the previous
+    Content after the final marker is simply part of the document: a refresh
     append did not finish (or someone edited the file afterwards). Either way the
     cursor no longer describes the file, so callers must not append onto it.
     """
@@ -132,7 +147,6 @@ def read_md_marker(path: Path) -> dict | None:
     if not isinstance(data, dict):
         return None
     data.setdefault("v", int(last.group(1)))
-    data["_trailing"] = bool(text[last.end():].strip())
     return data
 
 
@@ -153,9 +167,14 @@ def write_html_marker(folder: Path, data: dict) -> None:
 
 # --------------------------------------------------------------------- validation
 def validate(data: dict, session: Session, *, opts: str = "") -> tuple[str, str]:
-    """Return (verdict, detail).
+    """Return (verdict, detail) for refreshing the export `data` came from.
 
-    verdict: "ok" | "uptodate" | "mismatch" | "unsupported"
+    verdict: "ok" | "uptodate" | "shrink" | "options" | "unsupported"
+
+    An export is refreshed by re-rendering the whole document, so a transcript that
+    was edited, retried, compacted or reordered behind the last export needs no
+    detection: the next render simply reflects it. Only three things still have to
+    be caught before overwriting an export that is already on disk.
     """
     try:
         version = int(data.get("v", 0))
@@ -167,38 +186,41 @@ def validate(data: dict, session: Session, *, opts: str = "") -> tuple[str, str]
             f"(v{CURSOR_V})"
         )
 
-    if data.get("_trailing"):
-        return "mismatch", (
-            "it has content after its last marker, so an earlier append was "
-            "interrupted or the file was edited afterwards"
-        )
-
     count = data.get("messages")
     if not isinstance(count, int) or count < 0:
-        return "mismatch", "its marker has no usable message count"
+        # No usable count: nothing to compare against, so a refresh is the safe
+        # move. Re-rendering cannot lose turns the way an append could.
+        return "ok", ""
 
     total = len(session.messages)
+
+    # A source shorter than what was exported is the one case a re-render loses
+    # content. It is the single hole in the re-render design, and it is cheap to
+    # close: refuse, keep the longer export, and write the shorter one beside it.
     if count > total:
-        return "mismatch", f"it expected at least {count} messages but the session has {total}"
-
-    # Fail closed: an old or hand-made marker with no anchor cannot be verified, and
-    # appending on an unverifiable cursor is exactly the write that loses turns.
-    expected = data.get("anchor") or ""
-    if count > 0 and not expected:
-        return "mismatch", "its marker predates anchor checking and cannot be verified"
-    actual = anchor_for(session.messages, count)
-    if expected and actual and expected != actual:
-        return "mismatch", "the transcript no longer lines up with where it stopped"
-
-    if count == total:
-        return "uptodate", ""
+        return "shrink", (
+            f"it holds {count} messages but the transcript now has only {total}, "
+            f"so refreshing it would drop {count - total}"
+        )
 
     previous_opts = str(data.get("opts") or "")
     if opts and previous_opts and previous_opts != opts:
-        return "mismatch", (
-            "it was written with different render options (--brief/--full/--no-tools), "
-            "so appending would leave the file inconsistent"
+        # Silently rewriting a full-fidelity export as --brief (or the reverse) is
+        # a fidelity change the user never asked for. The hook runs one way and a
+        # hand-run export the other, so this is reachable in normal use.
+        return "options", (
+            "it was written with different render options "
+            "(--brief/--full/--no-tools/--no-thinking)"
         )
+
+    # Exact change detection: the digest covers every message and block, so an
+    # edited or retried turn is caught even though the count did not move.
+    previous_digest = str(data.get("digest") or "")
+    if previous_digest and previous_digest == content_digest(session):
+        return "uptodate", ""
+    if not previous_digest and count == total:
+        # Pre-digest marker: fall back to the count it does carry.
+        return "uptodate", ""
     return "ok", ""
 
 

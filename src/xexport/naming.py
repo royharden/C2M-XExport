@@ -288,3 +288,36 @@ def build_name(
         name = assemble("", values)
 
     return name or "session"
+
+
+# ------------------------------------------------------------------ finding one
+def find_export(directory: Path, session: Session, *, suffix: str = ".md",
+                want_dir: bool = False) -> Path | None:
+    """This session's canonical export in `directory`, found by its identity.
+
+    Every default name ends with `{identity}` = `<source>-<full session id>`, which
+    survives a retitle, so the identity suffix is the stable handle for "the export
+    of this chat". Matching on the *end* of the name is what keeps numbered
+    snapshots out: `… -- claude-<id> (2).md` does not end with the identity, so a
+    deliberate `--mode new` copy is never adopted as the thing to refresh.
+
+    Returns None when the name template omits `{identity}` (the caller then falls
+    back to reading cursor markers) or when nothing matches.
+    """
+    if not directory.is_dir():
+        return None
+    ident = identity(session.source, session.session_id)
+    if not ident:
+        return None
+    matches = [
+        p for p in directory.iterdir()
+        if (p.is_dir() if want_dir else (p.is_file() and p.suffix == suffix))
+        and (p.name if want_dir else p.stem).endswith(ident)
+    ]
+    if not matches:
+        return None
+    # Deterministic, and deliberately NOT an mtime comparison: refreshing a file
+    # makes it the newest, so an mtime rule would alternate between two candidates
+    # forever and leave both stale. Shortest name first prefers the plain export
+    # over any decorated sibling; the name breaks ties reproducibly.
+    return min(matches, key=lambda p: (len(p.name), p.name))

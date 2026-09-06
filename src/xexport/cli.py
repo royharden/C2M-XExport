@@ -17,10 +17,10 @@ from pathlib import Path
 
 import click
 
-from . import __version__, cursors, detect, naming
+from . import __version__, cursors, detect, naming, publish
 from .model import Session
 from .render.html import render_html
-from .render.markdown import addendum_header, describe_delta, render_markdown
+from .render.markdown import render_markdown
 from .sources import claude, codex, cursor
 from .titles import unique_path
 
@@ -51,7 +51,6 @@ class Options:
     copy_json: bool = False
     open_after: bool = False
     mode: str = "new"
-    seamless: bool = False
     callsign: str | None = None
     name_template: str | None = None
     html_subdir: str = "html"
@@ -258,17 +257,82 @@ def _md_document(session: Session, opt: Options, *, run: int) -> str:
     return f"{body}\n{marker}\n"
 
 
-def _export_md(session: Session, opt: Options, name: str, md_dir: Path) -> tuple[Path, str, str]:
-    """Write / append / replace the Markdown export.
+def _retitle(existing: Path, desired: Path) -> Path:
+    """Move an export to the name the current chat title produces.
 
-    Returns (path, verb, detail) with verb in {"wrote", "appended", "uptodate"}.
+    A chat is retitled while it runs, and the export follows it: identity lives in
+    the id suffix, so the file is still found next time. If the new name is already
+    taken the old one is kept -- renaming onto another export would destroy it.
+    """
+    if existing == desired or desired.exists():
+        return existing
+    try:
+        # The raw sidecar goes first: if the rename below fails we would otherwise
+        # be left with a renamed sidecar orphaned from its transcript. Failing here
+        # leaves a matched pair under the old name, which is recoverable.
+        sidecar = existing.with_suffix(".jsonl")
+        moved_sidecar = None
+        if sidecar.is_file() and not desired.with_suffix(".jsonl").exists():
+            sidecar.rename(desired.with_suffix(".jsonl"))
+            moved_sidecar = desired.with_suffix(".jsonl")
+        try:
+            existing.rename(desired)
+        except OSError:
+            if moved_sidecar is not None:
+                moved_sidecar.rename(sidecar)
+            raise
+    except OSError:
+        return existing
+    return desired
+
+
+def _find_previous(directory: Path, session: Session, opt: Options, *,
+                   suffix: str = ".md", want_dir: bool = False):
+    """This session's existing export, by name first and marker second.
+
+    The name carries `{identity}`, so a filename scan finds the export without
+    opening anything and works on a file whose marker was lost. A custom
+    `--name-template` can omit the identity, so the marker scan stays as the
+    fallback rather than the primary.
+    """
+    hit = naming.find_export(directory, session, suffix=suffix, want_dir=want_dir)
+    if hit is not None:
+        data = (cursors.read_html_marker(hit) if want_dir
+                else cursors.read_md_marker(hit)) or {}
+        return hit, data
+    finder = cursors.find_html_export if want_dir else cursors.find_md_export
+    return finder(directory, session, opt.html_opts_fingerprint if want_dir
+                  else cursors.options_fingerprint(**opt.md_kwargs))
+
+
+def _refuse(existing: Path, detail: str) -> None:
+    """Explain once why an existing export is being left alone.
+
+    The caller then falls through to writing a numbered companion, and must not
+    also emit the generic "already exists" warning: two warnings for one event
+    reads like two problems.
+    """
+    _warn(f"Warning: kept {existing.name} as it is -- {detail}. Writing this "
+          f"export beside it; use --mode replace to overwrite it instead.")
+
+
+def _export_md(session: Session, opt: Options, name: str, md_dir: Path) -> tuple[Path, str, str]:
+    """Write or refresh the Markdown export.
+
+    Refreshing re-renders the whole document and swaps it in atomically, rather
+    than appending the new turns. Re-rendering is what makes an edited, retried or
+    compacted transcript come out right, and it removes the failure modes an
+    in-place append has: a partial write, an interrupted run leaving a half-written
+    delta, or a cursor that advanced over content it never rendered.
+
+    Returns (path, verb, detail) with verb in {"wrote", "updated", "uptodate"}.
     """
     total = len(session.messages)
-    opts = cursors.options_fingerprint(**opt.md_kwargs)
     existing = None
+    refused = False
 
     if opt.mode in ("append", "replace"):
-        existing = cursors.find_md_export(md_dir, session, opts)
+        existing = _find_previous(md_dir, session, opt)
         if existing is None:
             _say_once(opt, "no-previous",
                       f"Note: no previous export found for session "
@@ -276,75 +340,41 @@ def _export_md(session: Session, opt: Options, name: str, md_dir: Path) -> tuple
 
     if existing is not None:
         path, data = existing
-        verdict, detail = cursors.validate(data, session, opts=opts)
-        if verdict in ("mismatch", "unsupported"):
-            _warn(f"Warning: the previous export {path.name} cannot be extended — "
-                  f"{detail}. Writing a fresh export instead.")
-            existing = None
-        elif opt.mode == "replace":
-            path.write_text(_md_document(session, opt, run=int(data.get("run") or 1) + 1),
-                            encoding="utf-8")
-            return path, "wrote", ""
-        elif verdict == "uptodate":
+        verdict, detail = cursors.validate(
+            data, session, opts=cursors.options_fingerprint(**opt.md_kwargs))
+        if verdict == "uptodate" and opt.mode == "append":
             when = str(data.get("updated", ""))[:16].replace("T", " ")
             return path, "uptodate", f"no new turns since {when} ({total} messages)"
+        if verdict in ("shrink", "options", "unsupported") and opt.mode != "replace":
+            _refuse(path, detail)
+            refused = True
         else:
-            start = int(data["messages"])
             run = int(data.get("run") or 1) + 1
-            body = render_markdown(
-                session, start_index=start, header=False, **opt.md_kwargs
-            )
-            if not body.strip():
-                # Filters can render a delta to nothing (--brief over a run of pure
-                # tool traffic). Advancing the cursor over it would skip those turns
-                # permanently, so leave the cursor where it is and write nothing.
-                return path, "uptodate", (
-                    f"{describe_delta(session, start, total)}, but nothing to write "
-                    f"under the current filters"
-                )
-            chunk = ""
-            if not opt.seamless:
-                chunk += addendum_header(
-                    session, run=run, start_index=start, end_index=total,
-                    previous_title=str(data.get("title") or ""),
-                )
-            chunk += body
-            chunk += "\n" + cursors.marker_line(cursors.make(
-                session, messages=total, run=run, opts=opts)) + "\n"
-            # No `newline=` here or in write_text: both use the platform default, so an
-            # appended chunk keeps the same line endings as the rest of the file.
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(chunk)
-            return path, "appended", (
-                f"{describe_delta(session, start, total)}, addendum {run}"
-            )
+            path = _retitle(path, md_dir / f"{name}.md")
+            publish.atomic_write_text(path, _md_document(session, opt, run=run))
+            return path, "updated", f"{total} messages, refresh {run}"
 
     md_dir.mkdir(parents=True, exist_ok=True)
     path = unique_path(md_dir, name, ".md")
-    if opt.mode != "new" and path.name != f"{name}.md":
-        # A collision here means an export of this session already existed but could
-        # not be read or extended. That is a fork, and a fork must be visible even
-        # under --quiet, which the hook recipes use.
-        _warn(f"Warning: {name}.md already exists but could not be extended; "
+    if opt.mode != "new" and not refused and path.name != f"{name}.md":
+        _warn(f"Warning: {name}.md already exists but could not be refreshed; "
               f"wrote {path.name} instead.")
-    path.write_text(_md_document(session, opt, run=1), encoding="utf-8")
+    publish.atomic_write_text(path, _md_document(session, opt, run=1))
     return path, "wrote", ""
 
 
 def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> tuple[Path, str, str]:
-    """Write / regenerate the paginated HTML export.
+    """Write or refresh the paginated HTML export.
 
-    HTML output is derived wholly from the session and is index-linked across pages, so
-    "append" means "re-render this folder in place" — the same bytes an incremental
-    append would have produced, without the partial-write failure mode.
+    The same rules as Markdown, on a folder: refreshing re-renders every page into
+    the existing folder and prunes any page a shorter render left behind.
     """
     total = len(session.messages)
     existing = None
-    run = 1
+    refused = False
 
     if opt.mode in ("append", "replace"):
-        existing = cursors.find_html_export(html_dir, session,
-                                            opt.html_opts_fingerprint)
+        existing = _find_previous(html_dir, session, opt, want_dir=True)
         if existing is None:
             _say_once(opt, "no-previous",
                       f"Note: no previous export found for session "
@@ -352,38 +382,34 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
 
     if existing is not None:
         folder, data = existing
-        verdict, detail = cursors.validate(data, session,
-                                           opts=opt.html_opts_fingerprint)
-        if verdict in ("mismatch", "unsupported"):
-            # Same guard as the Markdown path. Without it a mismatch re-rendered the
-            # folder in place, overwriting index.html and deleting the now-surplus
-            # page-NNN.html files — destroying an export of a longer transcript with
-            # no warning and exit 0.
-            _warn(f"Warning: the previous export {folder.name} cannot be extended — "
-                  f"{detail}. Writing a fresh export instead.")
-            existing = None
-        elif opt.mode == "append" and verdict == "uptodate":
+        verdict, detail = cursors.validate(
+            data, session, opts=opt.html_opts_fingerprint)
+        if verdict == "uptodate" and opt.mode == "append":
             when = str(data.get("updated", ""))[:16].replace("T", " ")
             return folder / "index.html", "uptodate", (
                 f"no new turns since {when} ({total} messages)"
             )
+        if verdict in ("shrink", "options", "unsupported") and opt.mode != "replace":
+            _refuse(folder, detail)
+            refused = True
         else:
             run = int(data.get("run") or 1) + 1
+            folder = _retitle(folder, html_dir / name)
             index_path = render_html(session, folder, **opt.html_kwargs)
             cursors.write_html_marker(folder, cursors.make(
-                session, messages=total, run=run,
-                opts=opt.html_opts_fingerprint))
-            return index_path, "wrote", ""
+                session, messages=total, run=run, opts=opt.html_opts_fingerprint))
+            return index_path, "updated", f"{total} messages, refresh {run}"
 
     html_dir.mkdir(parents=True, exist_ok=True)
     folder = unique_path(html_dir, name)
-    if opt.mode != "new" and folder.name != name:
-        _warn(f"Warning: {name}\\ already exists but could not be extended; "
+    if opt.mode != "new" and not refused and folder.name != name:
+        _warn(f"Warning: {name}\\ already exists but could not be refreshed; "
               f"wrote {folder.name}\\ instead.")
     index_path = render_html(session, folder, **opt.html_kwargs)
     cursors.write_html_marker(folder, cursors.make(
-        session, messages=total, run=run, opts=opt.html_opts_fingerprint))
+        session, messages=total, run=1, opts=opt.html_opts_fingerprint))
     return index_path, "wrote", ""
+
 
 
 def _path_budget(html_dir: Path, fallback: int) -> int:
@@ -501,8 +527,6 @@ def common_options(f):
                           "new: always a fresh export. replace: overwrite it.")(f)
     f = click.option("--append", is_flag=True,
                      help="Shorthand for --mode append.")(f)
-    f = click.option("--seamless", is_flag=True,
-                     help="In --mode append, omit the '➕ Addendum N' header.")(f)
     f = click.option("--callsign", default=None,
                      help="AgentNamer callsign for the {callsign} name field, or "
                           "'auto' to discover it [env: XEXPORT_CALLSIGN].")(f)

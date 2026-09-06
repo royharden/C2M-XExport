@@ -58,50 +58,6 @@ def _header_lines(session: Session) -> list[str]:
     return lines
 
 
-def describe_delta(session: Session, start_index: int, end_index: int) -> str:
-    """Human summary of an appended range.
-
-    A delta often contains no new *prompt* at all — a long turn of tool work appends
-    plenty of content without the user having said anything. "0 new prompts" is both
-    wrong-sounding and uninformative, so the unit switches to messages in that case.
-    """
-    prompts = sum(
-        1 for m in session.messages[start_index:end_index] if session.is_prompt(m)
-    )
-    span = f"messages {start_index + 1}–{end_index}"
-    if prompts:
-        return f"{prompts} new prompt{'' if prompts == 1 else 's'} ({span})"
-    count = end_index - start_index
-    return f"{count} new message{'' if count == 1 else 's'} ({start_index + 1}–{end_index})"
-
-
-def addendum_header(
-    session: Session,
-    *,
-    run: int,
-    start_index: int,
-    end_index: int,
-    previous_title: str = "",
-) -> str:
-    """The seam between an existing export and the turns appended after it.
-
-    An h2 so it lands in a table of contents alongside the ## 👤 User headings. The
-    title sentence appears only when the chat was actually renamed since the last run,
-    which is how a retitle gets recorded without renaming the file (and without
-    rewriting the header block at the top).
-    """
-    when = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    note = f"*{describe_delta(session, start_index, end_index)}.*"
-    if previous_title and previous_title != session.title:
-        note = note[:-1] + f" Chat title is now \"{session.title}\".*"
-    return "\n".join([
-        "", "---", "",
-        f"## ➕ Addendum {run} · {when}",
-        "", note, "",
-        "---", "",
-    ])
-
-
 def render_markdown(
     session: Session,
     *,
@@ -109,8 +65,6 @@ def render_markdown(
     include_tools: bool = True,
     include_thinking: bool = True,
     truncate: int = 2000,
-    start_index: int = 0,
-    header: bool = True,
 ) -> str:
     # One predicate for both renderers - see render/__init__.filtered.
     session = filtered(session, brief=brief, include_tools=include_tools,
@@ -119,9 +73,9 @@ def render_markdown(
     include_thinking = include_thinking and not brief
 
     label = session.assistant_label
-    lines: list[str] = _header_lines(session) if header else []
+    lines: list[str] = _header_lines(session)
 
-    for message in session.messages[start_index:]:
+    for message in session.messages:
         for block in message.blocks:
             if block.kind == USER_TEXT:
                 lines.extend([f"## 👤 User", "", block.text, ""])

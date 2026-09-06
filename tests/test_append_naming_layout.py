@@ -188,22 +188,26 @@ class TestLayout:
 
 # ============================================================================ append
 class TestAppend:
-    def test_append_adds_only_the_new_turns(self, claude_store, tmp_path):
-        out = tmp_path / "exports"
-        assert _export_md(out).exit_code == 0
-        md = next(out.glob("*.md"))
-        first = md.read_text(encoding="utf-8")
+    def test_a_refresh_holds_the_whole_conversation_in_one_file(self, claude_store,
+                                                                tmp_path):
+        """The requested outcome: one file per chat, always current.
 
+        0.2.0 appended a delta under an "Addendum" banner; the merged design
+        re-renders the whole document and swaps it in atomically. The visible seam
+        is gone on purpose - a re-render is what makes an edited or compacted
+        transcript come out right, which an append can only refuse.
+        """
+        out = tmp_path / "exports"
+        _export_md(out)
         _append_entries(claude_store, _turn("Third prompt", "Third answer"))
+
         r = _export_md(out, "--mode", "append")
         assert r.exit_code == 0, r.output
-
-        second = md.read_text(encoding="utf-8")
-        assert second.startswith(first)              # nothing already written was touched
-        assert second.count("Third prompt") == 1
-        assert second.count("Great, thanks!") == 1   # earlier turn not re-rendered
-        assert "## ➕ Addendum 2" in second
-        assert len(list(out.glob("*.md"))) == 1      # one file, not two
+        assert len(list(out.glob("*.md"))) == 1        # one file, not two
+        body = next(out.glob("*.md")).read_text(encoding="utf-8")
+        assert "Third prompt" in body and "Third answer" in body
+        assert "please fix the bug" in body            # earlier turns still present
+        assert body.count("- **Session:**") == 1       # rendered once, not doubled
 
     def test_append_with_nothing_new_is_a_no_op(self, claude_store, tmp_path):
         out = tmp_path / "exports"
@@ -224,11 +228,13 @@ class TestAppend:
         assert "no previous export" in r.output
         assert len(list(out.glob("*.md"))) == 1
 
-    def test_a_toolonly_delta_is_counted_in_messages_not_prompts(self, claude_store,
-                                                                 tmp_path):
-        """Found in live testing: a long turn of tool work appends real content but
-        no new user prompt, and the header read "0 new prompts" — wrong-sounding and
-        uninformative. The unit switches to messages when there is no prompt."""
+    def test_a_turn_of_pure_tool_work_still_refreshes(self, claude_store, tmp_path):
+        """A long turn of tool work adds real content but no new user prompt.
+
+        Under the old append this produced a header reading "0 new prompts"; under
+        re-render it simply has to land in the file rather than being mistaken for
+        "nothing happened".
+        """
         out = tmp_path / "exports"
         _export_md(out)
         _append_entries(claude_store, [
@@ -240,25 +246,19 @@ class TestAppend:
         ])
         r = _export_md(out, "--mode", "append")
         assert r.exit_code == 0, r.output
-        body = next(out.glob("*.md")).read_text(encoding="utf-8")
-        assert "1 new message" in body
-        assert "0 new prompts" not in body
+        assert "Up to date" not in r.output
+        assert "Run tests" in next(out.glob("*.md")).read_text(encoding="utf-8")
 
-    def test_seamless_appends_without_a_banner(self, claude_store, tmp_path):
-        out = tmp_path / "exports"
-        _export_md(out)
-        _append_entries(claude_store, _turn("Fourth prompt", "Fourth answer"))
-        r = _export_md(out, "--mode", "append", "--seamless")
-        assert r.exit_code == 0, r.output
-        body = next(out.glob("*.md")).read_text(encoding="utf-8")
-        assert "Fourth prompt" in body
-        assert "Addendum" not in body
+    def test_a_refresh_renames_the_file_to_follow_the_chat_title(self, claude_store,
+                                                                 tmp_path):
+        """Roy Q3: the export follows the current chat title.
 
-    def test_append_survives_a_retitle_and_notes_it(self, claude_store, tmp_path):
-        """Titles are rewritten mid-chat, so lookup is by session id, not by name."""
+        Identity lives in the id suffix, so the file is still found after it moves.
+        """
         out = tmp_path / "exports"
         _export_md(out)
         original = next(out.glob("*.md"))
+        assert "My Renamed Chat v2" in original.name
 
         _append_entries(claude_store, [
             {"type": "custom-title", "customTitle": "Renamed Later",
@@ -267,30 +267,39 @@ class TestAppend:
         ])
         r = _export_md(out, "--mode", "append")
         assert r.exit_code == 0, r.output
-        assert len(list(out.glob("*.md"))) == 1
-        assert next(out.glob("*.md")) == original          # not renamed
-        assert 'now "Renamed Later"' in original.read_text(encoding="utf-8")
 
-    def test_a_shifted_transcript_refuses_to_append(self, claude_store, tmp_path):
-        """Fail safe: a duplicate file is recoverable, a transcript with a hole is not.
+        written = list(out.glob("*.md"))
+        assert len(written) == 1                       # renamed, not duplicated
+        assert not original.exists()
+        assert "Renamed Later" in written[0].name
+        # identity survived the move, which is how the next run still finds it
+        assert written[0].stem.endswith("claude-" + CLAUDE_SESSION_ID)
+        assert "Fifth prompt" in written[0].read_text(encoding="utf-8")
 
-        The anchor covers the message the cursor stopped on, so this rewrites THAT
-        message. See test_edits_behind_the_cursor_are_not_detected for the limit.
+    def test_an_edited_turn_is_re_rendered_rather_than_refused(self, claude_store,
+                                                               tmp_path):
+        """The reason the merge took re-render over append.
+
+        An append could only detect that a transcript had been rewritten and refuse,
+        leaving a stale export plus a duplicate. Re-rendering just produces the
+        correct document - same message count, different content, one file.
         """
         out = tmp_path / "exports"
         _export_md(out)
         original = next(out.glob("*.md"))
+        assert "You're welcome." in original.read_text(encoding="utf-8")
 
-        # Same message count, different content at the cursor -> anchor mismatch.
         entries = claude_entries()
         entries[-2]["message"]["content"][0]["text"] = "A completely different answer"
         _jsonl(_transcript(claude_store), entries)
 
         r = _export_md(out, "--mode", "append")
-        assert r.exit_code == 0, r.output          # a hook must not fail the turn
-        assert "Warning" in r.output
-        assert len(list(out.glob("*.md"))) == 2    # fell back to a fresh export
-        assert "A completely different answer" not in original.read_text(encoding="utf-8")
+        assert r.exit_code == 0, r.output
+        assert "Warning" not in r.output
+        assert len(list(out.glob("*.md"))) == 1
+        body = next(out.glob("*.md")).read_text(encoding="utf-8")
+        assert "A completely different answer" in body
+        assert "You're welcome." not in body
 
     def test_a_truncated_transcript_refuses_to_append(self, claude_store, tmp_path):
         out = tmp_path / "exports"
@@ -302,13 +311,14 @@ class TestAppend:
         assert "Warning" in r.output
         assert len(list(out.glob("*.md"))) == 2
 
-    def test_edits_behind_the_cursor_are_not_detected(self, claude_store, tmp_path):
-        """Documents the limit of a one-message anchor, so nobody assumes more.
+    def test_an_edit_that_leaves_the_message_count_alone_is_still_caught(
+            self, claude_store, tmp_path):
+        """what_bug_this_catches: keying "up to date" on a message count.
 
-        The cursor fingerprints only the message it stopped on. A rewrite *behind*
-        that point is invisible — acceptable because every store xexport reads is
-        append-only, and the alternative (hashing the whole history on every turn)
-        costs more than the failure it would catch.
+        0.2.0 fingerprinted only the boundary message, so a rewrite behind it was
+        invisible and the export silently kept the old text. The content digest
+        covers every message and block, so an unchanged count is no longer mistaken
+        for nothing having happened.
         """
         out = tmp_path / "exports"
         _export_md(out)
@@ -318,8 +328,10 @@ class TestAppend:
 
         r = _export_md(out, "--mode", "append")
         assert r.exit_code == 0, r.output
-        assert "Up to date" in r.output             # not a warning: by design
+        assert "Up to date" not in r.output
         assert len(list(out.glob("*.md"))) == 1
+        assert "Silently rewritten earlier turn" in next(
+            out.glob("*.md")).read_text(encoding="utf-8")
 
     def test_replace_overwrites_in_place(self, claude_store, tmp_path):
         out = tmp_path / "exports"
@@ -426,57 +438,66 @@ class TestAppendSafety:
         assert "render options" in r.output
         assert len(list(out.glob("*.md"))) == 2
 
-    def test_a_delta_that_renders_to_nothing_does_not_move_the_cursor(self,
-                                                                      claude_store,
-                                                                      tmp_path):
+    def test_a_refresh_that_changes_nothing_leaves_the_file_untouched(
+            self, claude_store, tmp_path):
+        """The autosave hook runs this on every turn, so a no-op must cost nothing.
+
+        Not merely "writes the same bytes": the file is never opened for writing, so
+        its mtime does not move and OneDrive has nothing to sync.
+        """
         out = tmp_path / "exports"
-        _export_md(out, "--brief")
+        assert _export_md(out, "--brief").exit_code == 0
         md = next(out.glob("*.md"))
-        before = md.read_text(encoding="utf-8")
-        _append_entries(claude_store, [
-            {"type": "assistant", "sessionId": CLAUDE_SESSION_ID,
-             "timestamp": "2026-07-17T11:40:00.000Z",
-             "message": {"role": "assistant", "content": [
-                 {"type": "tool_use", "id": "t1", "name": "Bash",
-                  "input": {"command": "ls"}}]}},
-        ])
+        before, mtime = md.read_bytes(), md.stat().st_mtime_ns
+
         r = _export_md(out, "--brief", "--mode", "append")
         assert r.exit_code == 0, r.output
-        assert md.read_text(encoding="utf-8") == before
+        assert "Up to date" in r.output
+        assert md.read_bytes() == before
+        assert md.stat().st_mtime_ns == mtime
 
-        # …and the skipped turns are still reachable once a real prompt arrives.
-        _append_entries(claude_store, _turn("Real prompt", "Real answer"))
-        assert _export_md(out, "--brief", "--mode", "append").exit_code == 0
-        assert "Real prompt" in md.read_text(encoding="utf-8")
+    def test_a_failed_refresh_leaves_the_previous_export_intact(self, claude_store,
+                                                                tmp_path, monkeypatch):
+        """what_bug_this_catches: a half-written export.
 
-    def test_an_interrupted_append_is_not_replayed_onto(self, claude_store, tmp_path):
-        """A crash after the delta but before its marker leaves the cursor pointing at
-        the old position; appending again would write the same turns twice."""
+        An in-place append could be interrupted mid-write and leave a partial delta
+        that the next run would either replay or refuse. A refresh renders to a temp
+        file in the same directory and swaps it in with os.replace, so a failure
+        anywhere leaves the previous complete export exactly as it was.
+        """
         out = tmp_path / "exports"
         _export_md(out)
         md = next(out.glob("*.md"))
-        with open(md, "a", encoding="utf-8") as f:
-            f.write("\n## 👤 User\n\nhalf-written delta from a crashed run\n")
-        _append_entries(claude_store, _turn("Next", "Next"))
+        before = md.read_bytes()
+        _append_entries(claude_store, _turn("Doomed prompt", "Doomed answer"))
+
+        def fail_replace(source, destination):
+            raise OSError("simulated publication failure")
+
+        monkeypatch.setattr("xexport.publish.os.replace", fail_replace)
+        _export_md(out, "--mode", "append")
+        assert md.read_bytes() == before              # nothing was lost
+        assert not list(out.glob("*.tmp"))            # and no debris left behind
+
+    def test_a_marker_from_an_unknown_future_version_is_not_overwritten(
+            self, claude_store, tmp_path):
+        """Fail safe on a marker this build cannot reason about.
+
+        A newer xexport may record things this one does not understand, so refuse
+        the file and write beside it rather than rewriting it on a guess.
+        """
+        out = tmp_path / "exports"
+        _export_md(out)
+        md = next(out.glob("*.md"))
+        md.write_text(md.read_text(encoding="utf-8").replace('{"v":1,', '{"v":99,'),
+                      encoding="utf-8")
+        _append_entries(claude_store, _turn("Later prompt", "Later answer"))
 
         r = _export_md(out, "--mode", "append")
         assert r.exit_code == 0, r.output
         assert "Warning" in r.output
-        assert md.read_text(encoding="utf-8").count("half-written delta") == 1
         assert len(list(out.glob("*.md"))) == 2
-
-    def test_a_marker_without_an_anchor_fails_closed(self, claude_store, tmp_path):
-        out = tmp_path / "exports"
-        _export_md(out)
-        md = next(out.glob("*.md"))
-        with open(md, "a", encoding="utf-8") as f:
-            f.write('<!-- xexport-cursor v1 {"v":1,"session_id":"%s","messages":3} -->\n'
-                    % CLAUDE_SESSION_ID)
-        _append_entries(claude_store, _turn("Next", "Next"))
-
-        r = _export_md(out, "--mode", "append")
-        assert r.exit_code == 0, r.output
-        assert "Warning" in r.output
+        assert "Later prompt" not in md.read_text(encoding="utf-8")
 
     def test_append_conflicting_with_an_explicit_mode_is_an_error(self, claude_store,
                                                                   tmp_path):

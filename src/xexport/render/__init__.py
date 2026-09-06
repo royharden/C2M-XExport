@@ -33,9 +33,8 @@ def filtered(session: Session, *, brief: bool = False, include_tools: bool = Tru
 
     The message list keeps its length and order. A message can end up with no
     blocks at all (a tool message under --no-tools); it is left in place rather
-    than dropped so that anything indexing by message position — cursors,
-    anchors, `start_index` — still lines up with the unfiltered transcript.
-    Renderers skip empty messages at render time.
+    than dropped so that anything counting messages still agrees with the
+    unfiltered transcript. Renderers skip empty messages at render time.
     """
     if brief:
         include_tools = False
