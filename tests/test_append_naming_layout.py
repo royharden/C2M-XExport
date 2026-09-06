@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from xexport import cursors, naming
+from xexport import agentnamer, cursors, naming
 from xexport.cli import main
 from xexport.model import Session
 from xexport.sources import claude
@@ -593,15 +593,61 @@ class TestSubagents:
         assert written[0].name.startswith("0009_Claude_Sonnet5_Sub_Explorer -- ")
         assert "0007_Claude_Opus5" not in written[0].name   # the parent's callsign
 
-    def test_auto_callsign_uses_whoami_for_a_normal_session(self, claude_store,
-                                                            tmp_path, monkeypatch):
-        fake = tmp_path / "fake_claim.py"
-        fake.write_text("print('CALLSIGN 0007_Claude_Opus5  handle=x')\n",
-                        encoding="utf-8")
-        monkeypatch.setenv("XEXPORT_AGENTNAMER", str(fake))
+    def test_auto_callsign_reads_a_registry_without_mutating_it(self, tmp_path,
+                                                                monkeypatch):
+        """--callsign auto resolves a top-level session from AgentNamer's registry.
+
+        xexport is a read-only consumer: it must never init, claim or rewrite a
+        registry, so the whole tree is compared byte-for-byte afterwards.
+        """
+        monkeypatch.delenv("XEXPORT_CALLSIGN", raising=False)
+        registry = tmp_path / ".agent-registry"
+        (registry / "ids").mkdir(parents=True)
+        (registry / "config.json").write_text("{}", encoding="utf-8")
+        (registry / "ids" / "0007.json").write_text(json.dumps({
+            "name": "0007_Claude_Opus5", "session_id": CLAUDE_SESSION_ID,
+            "sub": False, "status": "active",
+        }), encoding="utf-8")
+        before = {p: p.read_bytes() for p in registry.rglob("*") if p.is_file()}
+
+        assert agentnamer.callsign_from_registry(
+            CLAUDE_SESSION_ID, tmp_path) == "0007_Claude_Opus5"
+        assert {p: p.read_bytes() for p in registry.rglob("*") if p.is_file()} == before
+
+    def test_auto_callsign_ignores_a_subagent_record_for_a_main_session(self, tmp_path,
+                                                                        monkeypatch):
+        """A _Sub record must never name the parent's own export."""
+        monkeypatch.delenv("XEXPORT_CALLSIGN", raising=False)
+        registry = tmp_path / ".agent-registry"
+        (registry / "ids").mkdir(parents=True)
+        (registry / "config.json").write_text("{}", encoding="utf-8")
+        (registry / "ids" / "0009.json").write_text(json.dumps({
+            "name": "0009_Claude_Sonnet5_Sub_Explorer", "session_id": CLAUDE_SESSION_ID,
+            "sub": True, "status": "active",
+        }), encoding="utf-8")
+        assert agentnamer.callsign_from_registry(CLAUDE_SESSION_ID, tmp_path) == ""
+
+    def test_auto_callsign_yields_no_prefix_without_a_registry(self, claude_store,
+                                                              tmp_path, monkeypatch):
+        """Eight of nine project roots have no registry; that must cost nothing."""
+        monkeypatch.delenv("XEXPORT_CALLSIGN", raising=False)
         out = tmp_path / "exports"
         assert _export_md(out, "--callsign", "auto").exit_code == 0
-        assert next(out.glob("*.md")).name.startswith("0007_Claude_Opus5 -- ")
+        # {agent} falls back to harness+model, so the export still names its agent.
+        assert next(out.glob("*.md")).name.startswith("Claude_Opus48 -- ")
+
+    def test_a_callsign_merely_mentioned_is_not_adopted(self, tmp_path, monkeypatch):
+        """REGRESSION: a prompt that discusses a callsign is not an assignment.
+
+        Without the stricter assignment pattern, asking an agent to review
+        "0007_Claude_Sonnet5_Sub_Reviewer" would stamp that name onto the export.
+        """
+        monkeypatch.delenv("XEXPORT_CALLSIGN", raising=False)
+        transcript = tmp_path / "subagent.jsonl"
+        _jsonl(transcript, [{"type": "user", "message": {"role": "user", "content":
+               "Discuss this example callsign: 0007_Claude_Sonnet5_Sub_Reviewer"}}])
+        assert agentnamer.detect_callsign(
+            "child", tmp_path, transcript, subagent=True) == ""
 
     def test_from_hook_ignores_a_non_subagent_transcript_path(self, subagent_store,
                                                               tmp_path):

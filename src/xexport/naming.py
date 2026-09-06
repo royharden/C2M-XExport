@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 
+from . import agentnamer
 from .model import Session
 from .titles import sanitize_title
 
@@ -41,15 +40,6 @@ FIELDS = (
 )
 
 _PLACEHOLDER = re.compile(r"\{([A-Za-z0-9_]*)\}")
-
-# AgentNamer grammar: <ID>_<Harness>_<Model>[_Sub][_<Team>_<Role>][_<Title>][_<Other>].
-# Tokens never contain "_", "." or a space, so the name ends at the first token that
-# does not look like one. AgentNamer's own CALLSIGN_RE stops after <Model>; this one
-# keeps going so a full multi-token callsign survives.
-_CALLSIGN_RE = re.compile(
-    r"\b([0-9A-Z]{2}[0-9]{2}_(?:Claude|Codex|Cursor|Grok)_[A-Za-z0-9-]+"
-    r"(?:_[A-Za-z0-9-]+)*)"
-)
 
 _AGENT_PREFIX = re.compile(r"^agent-", re.IGNORECASE)
 
@@ -166,66 +156,20 @@ def identity(source: str, session_id: str) -> str:
 
 
 # --------------------------------------------------------------------- callsigns
-def _agentnamer_script() -> Path | None:
-    """Locate AgentNamer's claim.py without hard-coding anyone's home directory."""
-    override = os.environ.get("XEXPORT_AGENTNAMER", "").strip()
-    if override:
-        p = Path(override)
-        return p if p.is_file() else None
-    home = Path.home()
-    for mirror in (".claude", ".codex", ".grok"):
-        p = home / mirror / "skills" / "AgentNamer" / "scripts" / "claim.py"
-        if p.is_file():
-            return p
-    return None
-
-
-def _callsign_from_agentnamer() -> str:
-    """`claim.py whoami` -> callsign, or "" for unclaimed / no registry / no script.
-
-    Runs under this interpreter rather than a bare `python`/`python3`, which sidesteps
-    the Windows launcher entirely (claim.py is stdlib-only, 3.8+). Exit 3 (unclaimed)
-    and exit 4 (project has no registry) both correctly mean "no prefix".
-    """
-    script = _agentnamer_script()
-    if not script:
-        return ""
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(script), "whoami"],
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    if proc.returncode != 0:
-        return ""
-    m = re.match(r"CALLSIGN\s+(\S+)", (proc.stdout or "").strip())
-    return m.group(1) if m else ""
-
-
-def _callsign_from_transcript(session: Session | None) -> str:
-    """A subagent's callsign, recovered from the prompt its parent wrote.
-
-    AgentNamer requires a parent to open a subagent's prompt with
-    "Your callsign is <name> (parent <ID>). ...", so a subagent transcript carries its
-    own callsign in its first user message. Only consulted for subagents: a top-level
-    prompt that merely *mentions* a callsign must not be mistaken for one.
-    """
-    if session is None or not session.is_subagent:
-        return ""
-    for message in session.messages[:4]:
-        if message.role != "user":
-            continue
-        for block in message.blocks:
-            m = _CALLSIGN_RE.search(block.text or "")
-            if m:
-                return m.group(1)
-    return ""
-
-
 def resolve_callsign(explicit: str | None, *, session: Session | None = None) -> str:
-    """--callsign VALUE > $XEXPORT_CALLSIGN > (--callsign auto) > "" ."""
+    """--callsign VALUE > $XEXPORT_CALLSIGN > (--callsign auto) > "" .
+
+    `auto` delegates to `agentnamer`, which reads an existing registry directly
+    rather than shelling out to claim.py: it resolves the registry the way
+    AgentNamer itself does (git-common-dir for linked worktrees, the
+    .agent-registry-path pointer) and never mutates it.
+
+    A subagent shares its PARENT's session id, so a registry lookup would answer
+    with the parent's callsign and stamp every subagent export with it. agentnamer
+    reads a subagent's own opening task record first, and its stricter assignment
+    pattern will not mistake a callsign merely *mentioned* in a prompt for an
+    assignment.
+    """
     value = explicit if explicit is not None else os.environ.get("XEXPORT_CALLSIGN", "")
     value = (value or "").strip()
     if not value:
@@ -233,14 +177,12 @@ def resolve_callsign(explicit: str | None, *, session: Session | None = None) ->
     if value.lower() != "auto":
         return sanitize_title(value, CALLSIGN_MAX)
 
-    # A subagent shares its PARENT's session id, so asking AgentNamer "who is this
-    # session?" answers with the parent's callsign — every subagent export would be
-    # stamped with its parent's name. Read the callsign the parent wrote into the
-    # subagent's own first prompt instead, and never fall through to whoami here.
-    if session is not None and session.is_subagent:
-        found = _callsign_from_transcript(session)
-    else:
-        found = _callsign_from_agentnamer()
+    found = agentnamer.detect_callsign(
+        session.session_id if session else "",
+        Path(session.cwd) if session is not None and session.cwd else Path.cwd(),
+        session.path if session is not None else None,
+        subagent=bool(session is not None and session.is_subagent),
+    )
     return sanitize_title(found, CALLSIGN_MAX) if found else ""
 
 
