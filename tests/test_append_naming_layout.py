@@ -693,3 +693,83 @@ class TestSubagents:
         withsub = CliRunner().invoke(main, ["list", "--source", "claude", "--subagents"])
         assert "Summarize existing canonical skills" not in plain.output
         assert "Summarize existing canonical skills" in withsub.output
+
+
+class TestHookReconciliation:
+    """A Stop payload can hold the final answer before the transcript does."""
+
+    @staticmethod
+    def _payload(store, text):
+        return json.dumps({
+            "transcript_path": str(_transcript(store)),
+            "session_id": CLAUDE_SESSION_ID,
+            "last_assistant_message": text,
+        })
+
+    def test_a_final_answer_missing_from_the_transcript_is_spliced_in(
+            self, claude_store, tmp_path):
+        """what_bug_this_catches: a Stop hook fires before the last assistant turn
+        has been flushed to the JSONL, so the receipt for that turn ends one answer
+        short -- the answer the turn was actually about."""
+        out = tmp_path / "exports"
+        r = CliRunner().invoke(
+            main, ["current", "--from-hook", "--format", "md", "--out", str(out)],
+            input=self._payload(claude_store, "The very last answer"))
+        assert r.exit_code == 0, r.output
+        assert "The very last answer" in next(
+            out.glob("*.md")).read_text(encoding="utf-8")
+
+    def test_an_answer_already_in_the_transcript_is_not_duplicated(self, claude_store,
+                                                                   tmp_path):
+        out = tmp_path / "exports"
+        r = CliRunner().invoke(
+            main, ["current", "--from-hook", "--format", "md", "--out", str(out)],
+            input=self._payload(claude_store, "You're welcome."))
+        assert r.exit_code == 0, r.output
+        body = next(out.glob("*.md")).read_text(encoding="utf-8")
+        assert body.count("You're welcome.") == 1
+
+    def test_a_multi_block_final_answer_is_not_duplicated(self, claude_store,
+                                                          tmp_path):
+        """what_bug_this_catches: comparing the payload against the CONCATENATION of
+        the final message's text blocks. A final answer split across two blocks never
+        equals the payload's single string, so the answer was appended a second
+        time."""
+        _append_entries(claude_store, [
+            {"type": "assistant", "sessionId": CLAUDE_SESSION_ID,
+             "timestamp": "2026-07-17T11:45:00.000Z",
+             "message": {"role": "assistant", "content": [
+                 {"type": "text", "text": "First half of the answer."},
+                 {"type": "text", "text": "Second half of the answer."}]}},
+        ])
+        out = tmp_path / "exports"
+        r = CliRunner().invoke(
+            main, ["current", "--from-hook", "--format", "md", "--out", str(out)],
+            input=self._payload(claude_store, "Second half of the answer."))
+        assert r.exit_code == 0, r.output
+        body = next(out.glob("*.md")).read_text(encoding="utf-8")
+        assert body.count("Second half of the answer.") == 1
+
+    def test_a_subagent_receipt_never_takes_the_payloads_message(self, subagent_store,
+                                                                 tmp_path):
+        """what_bug_this_catches: reconciliation that is not gated on is_subagent.
+
+        A SubagentStop payload may carry the PARENT's last message. Appending it to
+        the child's receipt puts words in the subagent's mouth, and a receipt that
+        misattributes what an agent said is worse than one that is a turn short.
+        """
+        out = tmp_path / "exports"
+        payload = json.dumps({
+            "transcript_path": str(subagent_store / "projects" / "C--proj"
+                                   / CLAUDE_SESSION_ID / "subagents"
+                                   / f"{SUBAGENT_ID}.jsonl"),
+            "session_id": CLAUDE_SESSION_ID,
+            "last_assistant_message": "PARENT-ONLY TEXT",
+        })
+        r = CliRunner().invoke(
+            main, ["subagents", "--from-hook", "--format", "md", "--out", str(out)],
+            input=payload)
+        assert r.exit_code == 0, r.output
+        written = list(out.glob("*.md"))
+        assert written, r.output
+        assert "PARENT-ONLY TEXT" not in written[0].read_text(encoding="utf-8")

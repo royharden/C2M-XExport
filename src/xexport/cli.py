@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import re
 import shutil
 import sys
-import tempfile
-import time
 import webbrowser
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +15,7 @@ from pathlib import Path
 import click
 
 from . import __version__, cursors, detect, naming, publish
-from .model import Session
+from .model import ASSISTANT_TEXT, Block, Message, Session
 from .render.html import render_html
 from .render.markdown import render_markdown
 from .sources import claude, codex, cursor
@@ -132,43 +129,6 @@ def _warn(message: str) -> None:
     click.echo(message, err=True)
 
 
-@contextmanager
-def _export_lock(path: Path):
-    """Serialise writes to one export across concurrent xexport processes.
-
-    Reachable in normal use: the recommended autosave setup runs a Stop hook and a
-    SubagentStop hook, which can overlap. Two appends racing on the same file both read
-    the same cursor and both write the same delta. The lock lives in the temp dir, not
-    beside the export, so `.chatexports` stays free of paperwork.
-    """
-    token = hashlib.sha1(str(path.resolve()).encode("utf-8", "replace")).hexdigest()[:16]
-    lock = Path(tempfile.gettempdir()) / f"xexport-{token}.lock"
-    fd = None
-    for _ in range(60):                      # ~6 s
-        try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
-        except FileExistsError:
-            try:                             # break a lock left by a killed process
-                if time.time() - lock.stat().st_mtime > 60:
-                    lock.unlink(missing_ok=True)
-                    continue
-            except OSError:
-                pass
-            time.sleep(0.1)
-        except OSError:
-            break                            # no temp dir: proceed unlocked
-    try:
-        yield
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-                lock.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
 # ================================================================ source plumbing
 def _sniff_source(path: Path) -> str:
     """Guess store from path layout or first-line shape."""
@@ -228,6 +188,44 @@ def _resolve_ref(ref: str, source: str) -> tuple[Path, str]:
         click.echo(f"Note: {ref!r} matches sessions in multiple stores; using "
                    f"{found[0][1]}. Pass --source to override.", err=True)
     return found[0]
+
+
+def _reconcile_last_assistant(session: Session, payload: dict) -> None:
+    """Splice in a final answer the hook has but the transcript does not yet.
+
+    A Claude Code `Stop` payload can carry `last_assistant_message` before that
+    text has been flushed to the JSONL, so an export taken at that moment ends one
+    answer short -- exactly the answer the turn was about.
+
+    Only ever additive, and only for a main session. A `SubagentStop` payload may
+    carry the *parent's* last message, and appending that to a child's receipt
+    would put words in the subagent's mouth; a subagent transcript is complete by
+    the time its own stop event fires, so there is nothing to reconcile there.
+    """
+    if session.is_subagent:
+        return
+    value = payload.get("last_assistant_message")
+    if not isinstance(value, str) or not value.strip():
+        return
+
+    def normalise(text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()
+
+    wanted = normalise(value)
+    last = next((m for m in reversed(session.messages)
+                 if m.role == "assistant"
+                 and any(b.kind == ASSISTANT_TEXT and (b.text or "").strip()
+                         for b in m.blocks)), None)
+    if last is not None:
+        texts = [normalise(b.text) for b in last.blocks
+                 if b.kind == ASSISTANT_TEXT and (b.text or "").strip()]
+        # Compare against each text block rather than the concatenation of them.
+        # A final answer rendered as several blocks would never equal the payload's
+        # single string, and appending it again duplicates the whole answer.
+        if any(wanted == text or wanted in text for text in texts):
+            return
+    session.messages.append(Message(
+        role="assistant", blocks=[Block(kind=ASSISTANT_TEXT, text=value)]))
 
 
 def _hook_payload() -> dict:
@@ -463,7 +461,8 @@ def _export(session: Session, opt: Options) -> None:
 
     # One lock for the whole export directory: read-cursor-then-append has to be
     # atomic against a concurrent xexport, and --format both writes twice.
-    with _export_lock(base):
+    with publish.export_lock(base, naming.identity(session.source,
+                                                  session.session_id)):
         if opt.fmt in ("html", "both"):
             result = _export_html(session, opt, name, html_dir)
             results.append(result)
@@ -647,7 +646,9 @@ def current(session_id, from_hook, source, **kw):
         hook_path = str(payload.get("transcript_path") or "").strip()
         if hook_path and Path(hook_path).is_file():
             path = Path(hook_path)
-            _export(_parse(path, _sniff_source(path)), opt)
+            session = _parse(path, _sniff_source(path))
+            _reconcile_last_assistant(session, payload)
+            _export(session, opt)
             return
         session_id = session_id or str(payload.get("session_id") or "").strip() or None
 
