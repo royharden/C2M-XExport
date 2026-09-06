@@ -51,12 +51,12 @@ that file is a known-good example.
   "hooks": {
     "Stop": [
       { "hooks": [ { "type": "command",
-        "command": "xexport current --from-hook --format md --mode append --seamless --quiet --callsign auto --out \"$CLAUDE_PROJECT_DIR/.chatexports\" || exit 0"
+        "command": "xexport current --from-hook --format md --mode append --quiet --callsign auto --out \"$CLAUDE_PROJECT_DIR/.chatexports\" || exit 0"
       } ] }
     ],
     "SubagentStop": [
       { "hooks": [ { "type": "command",
-        "command": "xexport subagents --from-hook --format md --mode append --seamless --quiet --callsign auto --out \"$CLAUDE_PROJECT_DIR/.chatexports\" || exit 0"
+        "command": "xexport subagents --from-hook --format md --mode append --quiet --callsign auto --out \"$CLAUDE_PROJECT_DIR/.chatexports\" || exit 0"
       } ] }
     ]
   }
@@ -84,8 +84,14 @@ Every part of that command line is load-bearing:
   `transcript_path` **only** if it really is a subagent transcript, because a
   `SubagentStop` payload may carry the main transcript — trusting it blindly would export
   the parent while reporting that no subagents were found.
-- **`--seamless`** drops the `## ➕ Addendum N` banner, so a per-turn append reads as one
-  continuous transcript instead of a stack of headers.
+- **`--mode append`** refreshes this session's export rather than writing a second file:
+  it re-renders the whole transcript and swaps it in atomically, so the receipt always
+  reads as one continuous document with no per-turn seams. A turn that changed nothing
+  does not touch the file at all.
+- **`last_assistant_message`** in a `Stop` payload is spliced in when the transcript does
+  not carry the final answer yet, so a per-turn receipt is not permanently one answer
+  behind. It is never applied to a subagent receipt, because a `SubagentStop` payload may
+  carry the *parent's* last message.
 - **`--quiet`** keeps hook output out of the conversation. It suppresses `Note:` lines but
   never `Warning:` — a fork always stays visible.
 - Want HTML too: add `--format both`. The Markdown stays at `.chatexports\<name>.md` and

@@ -24,9 +24,17 @@ browser DOM).
   keeps a *parent* transcript clean must stay lifted for a subagent's own file — see
   `claude.parse_file(include_sidechain=...)`. Getting this backwards produces an export
   with zero messages and no error, which is how it went unnoticed until 0.2.0.
-- **Append never rewrites bytes already on disk.** Cursor markers accumulate; reading
-  takes the last one. If you find yourself wanting to rewrite the header of an existing
-  export, add a marker instead.
+- **An export is refreshed by re-rendering it, never by appending to it.** Re-parse,
+  render the whole document, write it through `publish.atomic_write_text`. That is what
+  makes an edited, retried or compacted transcript come out right. If you find yourself
+  reaching for `open(path, "a")`, the design has drifted.
+- **A refresh may never quietly produce a worse export.** Re-render will happily overwrite
+  a good export with a lesser one, so before writing over an existing file check its
+  cursor record: refuse a transcript shorter than what was exported, and refuse a
+  different set of content filters. Only `--mode replace` overrides those.
+- **The content filters are privacy controls, not Markdown styling.** `--brief`,
+  `--no-tools` and `--no-thinking` must reach every format a run produces. Filter on the
+  neutral model in `render/__init__.filtered`, never in one renderer.
 
 ## Layout
 
@@ -37,8 +45,9 @@ browser DOM).
   claude-code-transcripts, Apache-2.0 — keep the NOTICE attribution).
 - `src/xexport/titles.py` — Windows-safe name sanitization; `detect.py` — current-session detection.
 - `src/xexport/naming.py` — export names: the `{agent} -- {title} -- {identity}` template
-  and AgentNamer callsign resolution. `cursors.py` — the append cursor recorded inside
-  each export.
+  and AgentNamer callsign resolution. `agentnamer.py` — read-only lookup of an existing
+  callsign registry. `cursors.py` — the record each export keeps of what it was made
+  from. `publish.py` — atomic writes and the per-session lock.
 - `src/xexport/cli.py` — click CLI; console script `xexport`.
 - Skills: canonical copies live in `PJ-OD\skills\xexport-html|md|auto\` (NOT in this repo);
   `skills/` here holds the templates they are generated from. Follow the

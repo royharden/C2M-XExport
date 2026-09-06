@@ -1,6 +1,6 @@
 ---
 name: xexport-md
-description: Export the current chat session to a single Markdown transcript under .chatexports using the xexport CLI, either as a new file or as an addendum appended to this session's existing export. Use when the user runs /xexport-md (Claude Code or Cursor), $xexport-md (Codex), or asks to export, save, archive, update, or add to this chat/session/conversation as Markdown. In Codex use CODEX_THREAD_ID; in Cursor use CURSOR_CONVERSATION_ID.
+description: Export the current chat session to a single Markdown transcript under .chatexports using the xexport CLI, either as a new file or by refreshing this session's existing export. Use when the user runs /xexport-md (Claude Code or Cursor), $xexport-md (Codex), or asks to export, save, archive, update, or add to this chat/session/conversation as Markdown. In Codex use CODEX_THREAD_ID; in Cursor use CURSOR_CONVERSATION_ID.
 ---
 
 # xexport-md
@@ -19,15 +19,20 @@ down in `.chatexports\html\`, so this folder stays scannable.
    | The user said | Use |
    |---|---|
    | `/xexport-md` on its own | `--mode append` |
-   | "just add to the existing" / "addendum" / "top it up" / "update it" | `--mode append` |
+   | "just add to the existing" / "top it up" / "update it" / "refresh it" | `--mode append` |
    | "make a whole copy of everything" / "a fresh copy" / "a separate one" / "snapshot it" | `--mode new` |
    | "redo it" / "rebuild it" / "overwrite the existing one" | `--mode replace` |
    | "as a new file called X" | `--mode new --name "X"` |
 
-   **`--mode append` is the default** because it is always safe: it adds only the turns
-   that are new since the last export, and if no export exists yet it simply creates
-   one. Re-running it costs nothing — with no new turns it prints "Up to date" and
-   leaves the file alone.
+   **`--mode append` is the default** because it is always safe: it refreshes this
+   session's export so it holds the whole conversation, and if no export exists yet it
+   simply creates one. Re-running it costs nothing — with nothing changed it prints
+   "Up to date" and does not touch the file.
+
+   A refresh re-renders the whole document rather than appending the new turns, so an
+   edited, retried or compacted chat comes out right. It refuses rather than overwrite
+   when the transcript is now shorter than the export, or when the export was made with
+   different content filters; `--mode replace` overrides those.
 
    **Substitute the mode you picked for `<MODE>` in the command below.** The
    commands are templates, not literals — copying one unchanged is the most likely
@@ -84,19 +89,22 @@ down in `.chatexports\html\`, so this folder stays scannable.
    ```
 
 6. Verify that the reported session id equals the requested id, then relay the result:
-   `wrote:` for a new file, `added:` + `wrote:` for an addendum, `Up to date` when
-   nothing changed. Say which of the three happened in one line — the user asked for an
-   export and deserves to know whether a file was created or extended.
+   `wrote:` for a new file, `updated:` when an existing export was refreshed,
+   `Up to date` when nothing changed. Say which of the three happened in one line — the
+   user asked for an export and deserves to know whether a file was created, refreshed,
+   or already current. Relay any `Warning:` verbatim: it means the existing export was
+   deliberately left alone and this one was written beside it.
 
 ## Notes
 
 - The export is a snapshot up to the moment the command runs; the turn that invoked this
   skill is only partially captured. Running it again later with `--mode append` picks up
   everything that followed.
-- An addendum is separated by a `## ➕ Addendum N` heading. `--seamless` suppresses it
-  when you want one continuous transcript (used by the automation hooks).
-- Append finds the previous export by **session id**, not by file name, so it still works
-  after the chat has been retitled — and the addendum notes the new title.
+- A refresh rewrites the whole file, so there is no addendum seam to look for; the
+  export simply holds the conversation as it stands.
+- The previous export is found by the session id in its **name**, not by its title, so a
+  refresh still finds it after the chat has been retitled — and renames the file to
+  follow the new title. A `… (2).md` copy is never adopted as the file to refresh.
 - `--brief` gives user + assistant text only (no tool calls or thinking).
 - `--full` disables truncation of long tool output.
 - `--name "Custom Name"` overrides the title part of the file name; collisions get " (2)".

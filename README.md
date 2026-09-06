@@ -48,9 +48,9 @@ Options:
   --format html|md|both        output format                    (default: html)
   --out DIR                    output directory                 (default: .\.chatexports)
   --name NAME                  override the {title} field       (default: chat title)
-  --mode new|append|replace    fresh / add only new turns / overwrite   (default: append)
+  --mode new|append|replace    fresh copy / refresh this session's export / force
+                               the refresh past its guards          (default: append)
   --append                     shorthand for --mode append
-  --seamless                   in append mode, omit the "Addendum N" header
   --callsign NAME|auto         AgentNamer callsign for the {agent} name field
   --name-template TEXT         default: {agent} -- {title} -- {identity}
   --html-subdir TEXT           default: html   ("" writes HTML flat, as in 0.1.x)
@@ -74,27 +74,38 @@ Output shapes:
 - `--format both` → both of the above, each in its own home. **Changed in 0.2.0:** the
   `.md` is no longer nested inside the HTML folder.
 
-## Incremental exports
-
-Every export records where it stopped, inside the export itself: an HTML comment on the
-last line of a Markdown transcript, `.xexport-cursor.json` inside an HTML folder.
+## Keeping an export current
 
 ```text
-xexport current --format md --mode append
+xexport current --format md
 ```
 
-`--mode append` is the default. It finds this session's existing export **by session
-id** — so it still works after the chat has been retitled — and adds only the turns that
-are new, under a `## Addendum N` heading (`--seamless` omits the heading). If there is no
-export yet it creates one. With nothing new it prints "Up to date" and does not touch the
-file, which makes it safe to run on every turn from a hook. `--mode new` writes a
-separate full copy instead.
+`--mode append` is the default, and it **refreshes** this session's export: it re-parses
+the transcript, re-renders the whole document, and swaps it in atomically. Re-rendering
+rather than appending is what makes an edited, retried or compacted transcript come out
+right — an append can only notice that the source no longer lines up and refuse.
 
-If the transcript no longer lines up with where the last export stopped, append refuses
-and writes a fresh export with a warning naming both files: a duplicate file is
-recoverable, a transcript with a hole in it is not. Note that after a deliberate
-`--mode new` copy, later appends follow the newest file — the snapshot becomes the living
-document and the original freezes.
+The export is found by the `{identity}` suffix in its name, so it is still found after
+the chat has been retitled, and the file is **renamed** to follow the new title. If there
+is no export yet, one is created. `--mode new` writes a separate full copy instead, and a
+numbered copy is never adopted as the file to refresh.
+
+Each export records what it was made from: an HTML comment on the last line of a Markdown
+transcript, `.xexport-cursor.json` inside an HTML folder. That record is what makes the
+next refresh safe, and it is checked before anything is overwritten:
+
+- **Nothing changed** → "Up to date", and the file is not opened for writing at all, so
+  its mtime does not move. Safe to run on every turn from a hook. Change detection is a
+  digest over every message and block, so an edited turn is caught even when the message
+  count has not moved.
+- **The transcript is now shorter than the export** → refused. This is the one case a
+  re-render would lose content, so the longer export is kept and the shorter one written
+  beside it with a warning naming both.
+- **The export was written with different content filters** → refused, rather than
+  silently rewriting a full-fidelity transcript as `--brief` or the reverse. An autosave
+  hook and a hand-run export resolve to the same file, so this happens in ordinary use.
+
+`--mode replace` overrides both refusals, which is what "overwrite it" means.
 
 ## Subagents
 
@@ -107,7 +118,7 @@ xexport subagents --session-id <parent session id> --format md
 
 Transcripts land beside the main exports, titled from the one-line task description the
 parent recorded in the transcript's `.meta.json` sidecar. `--subagent-subdir subagents`
-puts them in their own folder instead. Combined with the default append mode the command
+puts them in their own folder instead. Combined with the default refresh mode the command
 is idempotent, so re-running it costs nothing.
 
 ## In-chat usage
