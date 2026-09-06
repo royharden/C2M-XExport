@@ -171,3 +171,50 @@ flag the three skills emit is checked against `--help`.
 Install the CLI before the skills, never the reverse, and treat "does this command still
 parse?" as part of shipping a skill — the blast radius of a usage error inside a hook is
 much larger than the command that produced it.
+
+---
+
+## 10. A guard you cannot reach is not a guard
+
+The candidate ranking in `cursors._best` exists for one reason, written in its own
+docstring: so that a break costs *exactly one* extra file instead of one per turn. The
+re-render merge added a faster lookup — match the export by its identity suffix — and
+returned its hit directly. That lookup, by construction, never matches a numbered
+companion. So the refused original was re-selected every run, refused again, and forked
+again: one file, or one whole paginated HTML folder, per assistant turn, forever.
+
+The ranking was still there. Still tested. Still passing. Just unreachable.
+
+Two reviewers found it independently, both by *running* it rather than reading it. The
+test that should have caught it passed because its fixture grew the transcript back past
+the stale count within four iterations — it measured recovery, not the loop.
+
+**And the second half of the same bug:** once the companion existed, refreshing it
+rewrote its marker *without* the flag that marked it as a companion. It stopped being
+adoptable the moment it was used, and the next refusal forked again.
+
+**The general lesson:** when you add a faster path in front of an existing decision, the
+question is not "is the fast path correct?" but "what did the slow path decide that this
+one no longer gets to?" A short-circuit is a silent deletion of everything downstream of
+it. And a flag that survives being written but not being *re-written* is a flag that only
+works once.
+
+---
+
+## 11. Fail-closed has to survive the rewrite that removes the thing it checked
+
+The append design failed closed on an unverifiable cursor: no marker meant refuse, on the
+grounds that appending blind is exactly the write that loses turns. Re-render made the
+cursor much less load-bearing, so the missing-marker branch was relaxed to "nothing to
+compare against, so a refresh is safe".
+
+It is not safe. Re-render cannot lose turns *relative to the transcript*, but it will
+happily overwrite a long export with a compacted one — which is precisely what the
+shrink guard was added to prevent, and the shrink guard needs the marker. So the one
+path that had no marker was the one path with no guards at all, and its own docstring
+advertised that path as supported ("works on a file whose marker was lost").
+
+**The general lesson:** when a redesign makes a safety check look redundant, re-derive
+what the check was actually protecting against before relaxing it. "This mechanism can't
+have that failure any more" is a claim about the mechanism; the guard was usually about
+the *data*.
