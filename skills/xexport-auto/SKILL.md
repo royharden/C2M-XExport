@@ -29,7 +29,7 @@ chat") is delivered by exporting **at the end of every turn** with `--mode appen
 
 - the file exists from the first turn onward,
 - it is current after every turn, so a crash loses nothing,
-- `--mode append` only renders the turns that are new, so re-running is near-free,
+- re-running is near-free: an unchanged turn is a no-op,
 - and with no new turns it is a no-op that does not even touch the file.
 
 If the user explicitly wants a file to exist the moment a session opens, say what that
@@ -73,12 +73,13 @@ Every part of that command line is load-bearing:
 - **`--out "$CLAUDE_PROJECT_DIR/.chatexports"`.** Without it the output directory is
   `cwd/.chatexports`, and the hook's working directory is not something to assume — least
   of all in a project with nested settings files.
-- **`--callsign auto`** — there is no agent in the loop to pass its own callsign. For a
-  subagent this reads the "Your callsign is …" line its parent wrote; for a main session
-  it asks AgentNamer's `whoami`. A project with no registry produces no prefix, which is
-  the correct result. If `claim.py` is not under `~\.claude\skills\AgentNamer\`, point
-  `XEXPORT_AGENTNAMER` at the canonical copy — that is what the existing AgentNamer hooks
-  in this ecosystem do.
+- **`--callsign auto`** is the default, so the recipes below do not need it. xexport
+  reads an existing registry directly — it never runs `claim.py`, and never creates or
+  mutates a registry. For a main session it matches the session id against the registry's
+  `ids/*.json`, ignoring `sub` records; for a subagent it reads only the
+  "Your callsign is …" line its parent wrote, because a subagent shares its parent's
+  session id and a registry lookup would answer with the parent's name. A project with no
+  registry produces no prefix, which is the correct result.
 - **`--from-hook`** reads the hook JSON on stdin. `current` uses `transcript_path` when
   present, else `session_id`, else normal detection. `subagents` accepts a
   `transcript_path` **only** if it really is a subagent transcript, because a
@@ -189,26 +190,41 @@ optional flag.
   named `0007_Claude_Opus5 -- <chat title> -- claude-<session id>.md`. Without a
   callsign the same field falls back to `<Harness>_<Model>`, so every export still names
   its agent and adopting AgentNamer later only adds the id.
-- In a hook there is no agent to ask, so use `--callsign auto`: it runs AgentNamer's
-  `whoami` and, for a subagent transcript, falls back to reading the
-  "Your callsign is …" line the parent wrote at the top of the subagent's prompt.
-  A project without a registry produces no prefix at all, which is the correct result.
-- Set `XEXPORT_CALLSIGN` in the environment instead if you prefer not to repeat the flag.
+- In a hook there is no agent to ask, and none is needed: `auto` is the default and
+  reads the registry directly. A project without a registry produces no prefix at all,
+  which is the correct result.
+- `XEXPORT_CALLSIGN` overrides the lookup for a **main** session. It is deliberately
+  ignored for subagent receipts: it describes the process the parent is running in, and
+  labelling a child's receipt with the parent's name misattributes what an agent said.
 
 ## Checklist
 
 1. **Confirm `xexport --version` reports 0.2.0 or later** before anything else.
    `--mode`, `--from-hook`, `--callsign` and `subagents` do not exist in 0.1.1, and a
    hook built on them against an older CLI is the exit-2 turn loop described above.
-2. Confirm `.chatexports\` is in the project's `.gitignore`. Add it if not — do not skip
+   While you are there, dry-run the exact recipe you are about to install and check it
+   exits 0:
+
+   ```
+   echo '{"session_id":"<a real session id>"}' | xexport current --from-hook --format md --quiet --out .chatexports
+   ```
+
+2. **Resolve the executable the *hook* process can run, not the one your shell can.**
+   `xexport` lives in `~\.localin`, which is on an interactive shell's PATH but is
+   not guaranteed to be on the PATH of a GUI-launched harness — and a hook that cannot
+   find its command fails on every turn while looking, from the terminal, perfectly
+   installed. Resolve it (`(Get-Command xexport).Source`, or `command -v xexport`) and
+   put the **absolute path** in the hook command if there is any doubt. Verify by
+   running the hook from the app you actually use, not from a terminal.
+3. Confirm `.chatexports\` is in the project's `.gitignore`. Add it if not — do not skip
    this because "it probably is". These receipts are full-fidelity (see above), so an
    unignored `.chatexports\` commits tool output and anything sensitive in it.
-3. Find every `.claude\settings.json` in the project and decide which one owns the
+4. Find every `.claude\settings.json` in the project and decide which one owns the
    policy. Install in exactly one.
-4. Back up that file, merge the hooks, restart the session, and confirm a file appears
+5. Back up that file, merge the hooks, restart the session, and confirm a file appears
    in `.chatexports\` after the next turn.
-5. Other harnesses: append the marked boot section to `AGENTS.md`.
-6. Run one subagent and confirm its transcript lands in `.chatexports\` beside the main
+6. Other harnesses: append the marked boot section to `AGENTS.md`.
+7. Run one subagent and confirm its transcript lands in `.chatexports\` beside the main
    exports, named `... -- claude-agent-<hex>.md` — and that the parent transcript did
    **not** get a second copy written under that name.
-7. Follow `sync-skills-across-agents` if the project keeps skill mirrors.
+8. Follow `sync-skills-across-agents` if the project keeps skill mirrors.

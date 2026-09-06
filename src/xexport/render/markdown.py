@@ -4,9 +4,9 @@ Shape follows the codex-export style Roy liked (## 👤 / 🤖 headings), with
 collapsible <details> for thinking and tool output so long sessions stay
 skimmable on GitHub/Obsidian.
 
-0.2.0: the body can start part-way through a session (`start_index`) and the file
-header can be omitted, so a later run appends only its new turns to an export that
-already exists.
+An export is always the whole session; there is no partial render. Refreshing one
+re-renders it, which is what makes an edited, retried or compacted transcript come
+out correct rather than merely being detected as inconsistent.
 """
 
 from __future__ import annotations

@@ -24,6 +24,9 @@ from .titles import unique_path
 _SOURCE_CHOICES = ["auto", "claude", "codex", "cursor"]
 _MODE_CHOICES = ["new", "append", "replace"]
 
+# Verdicts that mean "leave the existing export alone and write beside it".
+_REFUSALS = ("shrink", "options", "unsupported", "unverifiable")
+
 
 def _utf8_stdout() -> None:
     for stream in (sys.stdout, sys.stderr):
@@ -246,11 +249,12 @@ def _hook_payload() -> dict:
 
 
 # ========================================================================= export
-def _md_document(session: Session, opt: Options, *, run: int) -> str:
+def _md_document(session: Session, opt: Options, *, run: int,
+                 forked: bool = False) -> str:
     body = render_markdown(session, **opt.md_kwargs)
     marker = cursors.marker_line(cursors.make(
         session, messages=len(session.messages), run=run,
-        opts=cursors.options_fingerprint(**opt.md_kwargs),
+        opts=cursors.options_fingerprint(**opt.md_kwargs), forked=forked,
     ))
     return f"{body}\n{marker}\n"
 
@@ -288,19 +292,36 @@ def _find_previous(directory: Path, session: Session, opt: Options, *,
                    suffix: str = ".md", want_dir: bool = False):
     """This session's existing export, by name first and marker second.
 
-    The name carries `{identity}`, so a filename scan finds the export without
-    opening anything and works on a file whose marker was lost. A custom
-    `--name-template` can omit the identity, so the marker scan stays as the
-    fallback rather than the primary.
+    The name carries `{identity}`, so a filename scan finds the canonical export
+    without opening anything, and it deliberately never matches a numbered copy.
+
+    But the canonical export is exactly the file a refusal leaves untouched. If it
+    cannot be refreshed, keep looking: the marker scan ranks candidates by whether
+    they actually validate, so it finds the companion the refusal wrote. Without
+    this second look the refusal repeats on every run and forks another file every
+    turn -- which is the failure the ranking exists to prevent.
+
+    The marker scan is also the only path for a `--name-template` that omits
+    `{identity}`.
     """
+    opts = opt.html_opts_fingerprint if want_dir \
+        else cursors.options_fingerprint(**opt.md_kwargs)
+    finder = cursors.find_html_export if want_dir else cursors.find_md_export
+
     hit = naming.find_export(directory, session, suffix=suffix, want_dir=want_dir)
     if hit is not None:
         data = (cursors.read_html_marker(hit) if want_dir
                 else cursors.read_md_marker(hit)) or {}
-        return hit, data
-    finder = cursors.find_html_export if want_dir else cursors.find_md_export
-    return finder(directory, session, opt.html_opts_fingerprint if want_dir
-                  else cursors.options_fingerprint(**opt.md_kwargs))
+        verdict, _ = cursors.validate(data, session, opts=opts)
+        if verdict in ("ok", "uptodate"):
+            return hit, data
+        alternative = finder(directory, session, opts)
+        if alternative is not None:
+            other_verdict, _ = cursors.validate(alternative[1], session, opts=opts)
+            if other_verdict in ("ok", "uptodate"):
+                return alternative
+        return hit, data          # nothing better: refuse against the canonical one
+    return finder(directory, session, opts)
 
 
 def _refuse(existing: Path, detail: str) -> None:
@@ -343,13 +364,17 @@ def _export_md(session: Session, opt: Options, name: str, md_dir: Path) -> tuple
         if verdict == "uptodate" and opt.mode == "append":
             when = str(data.get("updated", ""))[:16].replace("T", " ")
             return path, "uptodate", f"no new turns since {when} ({total} messages)"
-        if verdict in ("shrink", "options", "unsupported") and opt.mode != "replace":
+        if verdict in _REFUSALS and opt.mode != "replace":
             _refuse(path, detail)
             refused = True
         else:
             run = int(data.get("run") or 1) + 1
             path = _retitle(path, md_dir / f"{name}.md")
-            publish.atomic_write_text(path, _md_document(session, opt, run=run))
+            # Carry the flag forward. A companion that forgets it was one stops
+            # being adoptable the moment it is refreshed, and the next refusal
+            # forks again -- which is the per-turn fork with extra steps.
+            publish.atomic_write_text(path, _md_document(
+                session, opt, run=run, forked=bool(data.get("forked"))))
             return path, "updated", f"{total} messages, refresh {run}"
 
     md_dir.mkdir(parents=True, exist_ok=True)
@@ -357,7 +382,8 @@ def _export_md(session: Session, opt: Options, name: str, md_dir: Path) -> tuple
     if opt.mode != "new" and not refused and path.name != f"{name}.md":
         _warn(f"Warning: {name}.md already exists but could not be refreshed; "
               f"wrote {path.name} instead.")
-    publish.atomic_write_text(path, _md_document(session, opt, run=1))
+    publish.atomic_write_text(
+        path, _md_document(session, opt, run=1, forked=refused))
     return path, "wrote", ""
 
 
@@ -387,7 +413,7 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
             return folder / "index.html", "uptodate", (
                 f"no new turns since {when} ({total} messages)"
             )
-        if verdict in ("shrink", "options", "unsupported") and opt.mode != "replace":
+        if verdict in _REFUSALS and opt.mode != "replace":
             _refuse(folder, detail)
             refused = True
         else:
@@ -395,7 +421,8 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
             folder = _retitle(folder, html_dir / name)
             index_path = render_html(session, folder, **opt.html_kwargs)
             cursors.write_html_marker(folder, cursors.make(
-                session, messages=total, run=run, opts=opt.html_opts_fingerprint))
+                session, messages=total, run=run, opts=opt.html_opts_fingerprint,
+                forked=bool(data.get("forked"))))
             return index_path, "updated", f"{total} messages, refresh {run}"
 
     html_dir.mkdir(parents=True, exist_ok=True)
@@ -405,7 +432,8 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
               f"wrote {folder.name}\\ instead.")
     index_path = render_html(session, folder, **opt.html_kwargs)
     cursors.write_html_marker(folder, cursors.make(
-        session, messages=total, run=1, opts=opt.html_opts_fingerprint))
+        session, messages=total, run=1, opts=opt.html_opts_fingerprint,
+        forked=refused))
     return index_path, "wrote", ""
 
 
@@ -422,7 +450,12 @@ def _path_budget(html_dir: Path, fallback: int) -> int:
         base = len(str(html_dir.resolve())) + 1          # + the separator before <name>
     except OSError:
         return fallback
-    budget = 260 - base - len("\\page-001.html") - 1
+    # The deepest file an export writes is not the page: .xexport-cursor.json is
+    # longer, and with --json the raw sidecar is longer still. Reserving only the
+    # page let render_html succeed and then write_html_marker raise, leaving a
+    # folder with no marker -- which the next run cannot verify.
+    deepest = max(len("\\page-001.html"), len("\\.xexport-cursor.json"))
+    budget = 260 - base - deepest - 1
     return max(40, min(fallback, budget))
 
 
@@ -492,7 +525,7 @@ def _report(session: Session, opt: Options, results: list[tuple[Path, str, str]]
         click.echo(f"  file:    {path}")
         return
 
-    headline = "Appended" if "appended" in verbs else "Exported"
+    headline = "Updated" if "updated" in verbs else "Exported"
     click.echo(f"{headline}: {session.title}")
     click.echo(f"  source:  {session.app or session.source}"
                f" · session {session.session_id}")
@@ -500,9 +533,10 @@ def _report(session: Session, opt: Options, results: list[tuple[Path, str, str]]
         if verb == "uptodate":
             click.echo(f"  current: {path}")
             continue
-        if verb == "appended":
-            click.echo(f"  added:   {detail}")
-        click.echo(f"  wrote:   {path}")
+        # "wrote" is a file that did not exist; "updated" is one that did. Saying
+        # which matters when a refusal has just written a companion beside an
+        # export the user thought was being refreshed.
+        click.echo(f"  {'updated:' if verb == 'updated' else 'wrote:':<8} {path}")
 
 
 # ======================================================================== options
@@ -526,9 +560,12 @@ def common_options(f):
                           "new: always a fresh export. replace: overwrite it.")(f)
     f = click.option("--append", is_flag=True,
                      help="Shorthand for --mode append.")(f)
-    f = click.option("--callsign", default=None,
-                     help="AgentNamer callsign for the {callsign} name field, or "
-                          "'auto' to discover it [env: XEXPORT_CALLSIGN].")(f)
+    f = click.option("--callsign", default="auto",
+                     show_default=True,
+                     help="Callsign for the {agent}/{callsign} name fields. 'auto' "
+                          "reads an existing AgentNamer registry and yields nothing "
+                          "when the project has none; a literal name overrides it; "
+                          "'' disables the lookup [env: XEXPORT_CALLSIGN].")(f)
     f = click.option("--name-template", default=None,
                      help="Name template, e.g. '{agent} -- {title} -- {identity}' "
                           "[env: XEXPORT_NAME_TEMPLATE].")(f)

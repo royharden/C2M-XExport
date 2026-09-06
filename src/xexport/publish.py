@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob as _glob
 import hashlib
 import os
 import shutil
@@ -56,7 +57,9 @@ def export_lock(export_root: Path, identity: str) -> Iterator[None]:
 def _sweep_stale_temps(directory: Path, name: str) -> None:
     """Drop temp files a killed process left behind, so they cannot accumulate."""
     try:
-        for leftover in directory.glob(f".{name}.*.tmp"):
+        # sanitize_title permits [ and ], which glob would read as a character
+        # class and quietly match nothing.
+        for leftover in directory.glob(f".{_glob.escape(name)}.*.tmp"):
             try:
                 if time.time() - leftover.stat().st_mtime > _STALE_TEMP_SECONDS:
                     leftover.unlink()

@@ -1,18 +1,24 @@
-"""Append bookkeeping: where the previous export of a session stopped.
+"""What an export was made from, recorded inside the export itself.
 
-The record lives *inside* the export — an HTML comment on the last line of a Markdown
-transcript, a small JSON file inside an HTML export folder. Keeping it in the artefact
-rather than in a sidecar next to it is the whole point: `.chatexports` is meant to be a
-folder of Markdown files you can scan, not a folder of Markdown files and their
-paperwork.
+An HTML comment on the last line of a Markdown transcript, a small JSON file inside
+an HTML export folder. Keeping it in the artefact rather than in a sidecar beside it
+is the whole point: `.chatexports` is meant to be a folder of transcripts you can
+scan, not a folder of transcripts and their paperwork.
 
-Markdown markers are **append-only**. Each run appends its own; reading means taking the
-last one. Nothing ever rewrites bytes that are already on disk.
+A refresh re-renders the whole document, so this record is not a resume point. It
+exists to answer three questions *before* an existing export is overwritten:
 
-The governing rule for everything here: **an append must never drop or duplicate
-transcript content.** Every check below fails *closed* — anything unexpected downgrades
-the run to a fresh export with a warning, because a duplicate file is recoverable and a
-transcript with a hole in it is not.
+- has anything actually changed (`digest`), so an unchanged turn costs no write;
+- would this refresh drop content (`messages`), which is the one case re-rendering
+  loses something;
+- was the export made with different content filters (`opts`), so a --brief hook
+  cannot quietly downgrade a full-fidelity transcript.
+
+Every check fails **closed**: anything unexpected -- including a marker that is
+missing, truncated or from a newer version -- refuses the existing export and writes
+beside it. A duplicate file is recoverable; a transcript with a hole in it is not.
+The companion carries `forked`, which is what lets the next run adopt it rather than
+refusing the same original again.
 """
 
 from __future__ import annotations
@@ -25,9 +31,12 @@ from datetime import datetime
 from pathlib import Path
 
 from . import __version__, naming
-from .model import Message, Session
+from .model import Session
 
 CURSOR_V = 1
+
+# " (2)", " (3)" ... as unique_path appends them.
+_NUMBERED = re.compile(r" \((\d+)\)$")
 HTML_CURSOR_NAME = ".xexport-cursor.json"
 TAIL_BYTES = 4096
 TITLE_IN_MARKER = 120   # keeps the marker far inside TAIL_BYTES
@@ -41,17 +50,6 @@ MARKER_RE = re.compile(r"<!--\s*xexport-cursor\s+v(\d+)\s+(\{.*?\})\s*-->", re.D
 _SEP_MESSAGE = b""
 _SEP_BLOCK = b""
 _SEP_FIELD = b""
-def _fingerprint(message: Message) -> str:
-    block = message.blocks[0] if message.blocks else None
-    text = ""
-    kind = ""
-    if block is not None:
-        kind = block.kind
-        text = block.text or block.output or block.args or ""
-    payload = f"{message.role}|{message.timestamp}|{kind}|{text[:200]}"
-    return hashlib.sha1(payload.encode("utf-8", "replace")).hexdigest()[:12]
-
-
 def content_digest(session: Session) -> str:
     """Fingerprint of everything an export would render from this session.
 
@@ -94,9 +92,14 @@ def options_fingerprint(*, brief: bool, include_tools: bool,
 
 
 # ------------------------------------------------------------------------ records
-def make(session: Session, *, messages: int, run: int, opts: str = "") -> dict:
+def make(session: Session, *, messages: int, run: int, opts: str = "",
+         forked: bool = False) -> dict:
     return {
         "v": CURSOR_V,
+        # True when this export was written beside one that was refused. It is what
+        # tells the next run that this companion, and not the untouchable original,
+        # is the file to keep refreshing -- otherwise a refusal repeats every turn.
+        "forked": bool(forked),
         "session_id": session.session_id,
         "source": session.source,
         "messages": messages,
@@ -160,6 +163,9 @@ def read_html_marker(folder: Path) -> dict | None:
 
 
 def write_html_marker(folder: Path, data: dict) -> None:
+    """Published the same way as the pages it describes, so a crash mid-write
+    cannot leave a folder whose marker is truncated JSON -- which now reads as
+    "unverifiable" and would cost a companion folder."""
     (folder / HTML_CURSOR_NAME).write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -188,9 +194,14 @@ def validate(data: dict, session: Session, *, opts: str = "") -> tuple[str, str]
 
     count = data.get("messages")
     if not isinstance(count, int) or count < 0:
-        # No usable count: nothing to compare against, so a refresh is the safe
-        # move. Re-rendering cannot lose turns the way an append could.
-        return "ok", ""
+        # Fail closed. Without a usable marker there is no way to tell whether this
+        # refresh would drop content or change fidelity, and re-rendering over it
+        # would do so silently. Refusing costs one companion file, which carries a
+        # marker, so every later run refreshes that instead -- it self-heals.
+        return "unverifiable", (
+            "it carries no usable xexport marker, so there is no way to tell whether "
+            "refreshing it would lose content"
+        )
 
     total = len(session.messages)
 
@@ -253,6 +264,11 @@ def _best(hits: list[tuple[Path, dict]], session: Session,
     actually validates means the fallback export written on the first failure is the
     one every later run extends, so a break costs exactly one extra file.
     """
+    # A " (2)" name is either a deliberate --mode new snapshot or the companion a
+    # refusal wrote. Only the latter may be adopted: adopting a snapshot would make
+    # the point-in-time copy the living document and silently freeze the original.
+    hits = [(p, d) for p, d in hits
+            if not _NUMBERED.search(p.stem if p.suffix else p.name) or d.get("forked")]
     if not hits:
         return None
 

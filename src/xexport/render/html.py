@@ -8,6 +8,7 @@ with client-side expand/collapse.
 
 from __future__ import annotations
 
+import copy
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from jinja2 import Environment, PackageLoader, select_autoescape
 from markupsafe import Markup
 
 from .. import __version__
+from ..publish import atomic_write_text
 from ..model import ASSISTANT_TEXT, TOOL_CALL, USER_TEXT, Message, Session
 from . import filtered
 
@@ -123,14 +125,23 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
     for page_no, page_groups in enumerate(pages, start=1):
         views: list[dict] = []
         for group in page_groups:
-            first_anchor = anchor
+            first_anchor = None
             for m in group:
                 # A message stripped bare by a filter would render as an empty
                 # card; skip drawing it, but still spend its anchor so numbering
                 # matches the unfiltered transcript.
                 if m.blocks:
+                    if first_anchor is None:
+                        # The index must link to a message that was actually
+                        # drawn. Anchoring on the group's first message linked to
+                        # nothing whenever a filter emptied it -- reachable for
+                        # group 1, which absorbs any metadata before the first
+                        # prompt, and --no-tools empties exactly that.
+                        first_anchor = anchor
                     views.append(_role_view(m, session, anchor))
                 anchor += 1
+            if first_anchor is None:
+                first_anchor = anchor - len(group)
             prompt_number += 1
             ts = next((m.timestamp for m in group if m.timestamp), "")
             index_items.append({
@@ -148,20 +159,26 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
     for page_no, views in enumerate(page_views, start=1):
         html = page_tpl.render(number=page_no, total_pages=total_pages,
                                messages=views, **common)
-        (out_dir / f"page-{page_no:03d}.html").write_text(html, encoding="utf-8")
+        atomic_write_text(out_dir / f"page-{page_no:03d}.html", html)
 
-    index_tpl = env.get_template("index.html")
-    html = index_tpl.render(total_pages=total_pages, index_items=index_items,
-                            stats=session.stats(), **common)
-    index_path = out_dir / "index.html"
-    index_path.write_text(html, encoding="utf-8")
-
-    # Re-rendering into an existing folder (--mode append/replace): drop pages left
-    # over from a previous, longer render so nothing stale stays linkable.
+    # Re-rendering into an existing folder: drop pages left over from a previous,
+    # longer render so nothing stale stays linkable. Done BEFORE the index is
+    # written, so the index is the last file published and never points at a page
+    # that is about to be removed.
     for stale in out_dir.glob("page-*.html"):
         try:
             if int(stale.stem.split("-")[1]) > total_pages:
                 stale.unlink()
         except (ValueError, IndexError, OSError):
             continue
+
+    index_tpl = env.get_template("index.html")
+    # Count what was rendered, not what was parsed: a filter can empty a message,
+    # and an index reading "4 messages" above two cards is simply wrong.
+    visible = copy.copy(session)
+    visible.messages = [m for m in session.messages if m.blocks]
+    html = index_tpl.render(total_pages=total_pages, index_items=index_items,
+                            stats=visible.stats(), **common)
+    index_path = out_dir / "index.html"
+    atomic_write_text(index_path, html)
     return index_path

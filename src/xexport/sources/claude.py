@@ -24,6 +24,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import agentnamer
 from ..model import (
     ASSISTANT_TEXT, RAW, THINKING, TOOL_CALL, TOOL_RESULT, USER_TEXT,
     Block, Message, Session,
@@ -280,7 +281,14 @@ def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
 
     user_fallback = ""
     if first_user_text.strip():
-        user_fallback = first_user_text.strip().splitlines()[0][:80]
+        text = first_user_text
+        if include_sidechain:
+            # A subagent's opening prompt begins with the callsign line its parent
+            # wrote ("Your callsign is 0009_... (parent 0007). Do not claim..."),
+            # which is assignment boilerplate, not what the subagent was asked to
+            # do. Only reached when the .meta.json sidecar is missing.
+            text = agentnamer.strip_assignment_preamble(text)
+        user_fallback = text.strip().splitlines()[0][:80] if text.strip() else ""
     meta_title = ""
     if include_sidechain:
         meta = subagent_meta(path)

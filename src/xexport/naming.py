@@ -3,7 +3,8 @@
 The name is built from a template so the shape is a preference, not a decision baked
 into the code:
 
-    {callsign}_{title}_{id8}   ->  0007_Claude_Opus5_Update xexport skills_a68ce6ac
+    {agent} -- {title} -- {identity}
+        ->  0007_Claude_Opus5 -- Update xexport skills -- claude-a68ce6ac-...-437f
 
 Empty fields collapse away, which is what makes the callsign prefix appear only for
 projects that actually use AgentNamer — no conditional logic anywhere else.
@@ -24,7 +25,8 @@ from .titles import sanitize_title
 # source transcript. Reverting to the compact form is one environment variable and no
 # code change:
 #
-#     setx XEXPORT_NAME_TEMPLATE "{callsign} -- {title} -- {id8}"
+#     setx XEXPORT_NAME_TEMPLATE "{agent} -- {title} -- {id8}"      compact ids
+#     setx XEXPORT_NAME_TEMPLATE "{title}"                          pre-0.2.0 names
 #
 # Measured before committing to it: even the deepest .chatexports root on this machine
 # (…\NetScreen\NetScreen-JuniperConvert) leaves 90 characters for the title once
@@ -170,6 +172,17 @@ def resolve_callsign(explicit: str | None, *, session: Session | None = None) ->
     pattern will not mistake a callsign merely *mentioned* in a prompt for an
     assignment.
     """
+    if session is not None and session.is_subagent:
+        # A subagent's callsign can only come from its own transcript. Neither a
+        # flag nor the environment can supply one: both describe the PARENT -- the
+        # env var because that is the process the parent is running in (and
+        # xexport-auto tells people to set it), the flag because `xexport subagents`
+        # exports many children under one invocation, so a single name cannot be
+        # right for all of them. A receipt labelled with the wrong agent's name
+        # misattributes what an agent said, which is worse than carrying no name.
+        found = agentnamer.callsign_from_transcript(session.path)
+        return sanitize_title(found, CALLSIGN_MAX) if found else ""
+
     value = explicit if explicit is not None else os.environ.get("XEXPORT_CALLSIGN", "")
     value = (value or "").strip()
     if not value:

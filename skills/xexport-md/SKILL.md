@@ -43,11 +43,11 @@ down in `.chatexports\html\`, so this folder stays scannable.
    `.chatexports` folder (Claude Code: `${CLAUDE_PROJECT_DIR}\.chatexports`;
    Codex / Cursor: `<workspace root>\.chatexports`).
 
-3. **Add your callsign if you hold one.** If you claimed an AgentNamer callsign in this
-   session, pass `--callsign "<your full callsign>"` so the file is named after you
-   (`0007_Claude_Opus5_Update xexport skills_a68ce6ac.md`). If this project does not use
-   AgentNamer, omit the flag entirely — do not invent a callsign, and do not run
-   AgentNamer just to get one.
+3. **Callsign: you do not need to pass one.** The `{agent}` field resolves itself —
+   the AgentNamer callsign when this project has a registry, `<Harness>_<Model>` when it
+   does not, so the export names its agent either way. Pass
+   `--callsign "<your full callsign>"` only to override what it finds, and never invent
+   one or run AgentNamer just to get one.
 
 4. **Pick the command for your harness:**
 
