@@ -70,9 +70,15 @@ Every part of that command line is load-bearing:
   An unknown flag is a click usage error (exit 2), and that is reachable in practice —
   update the skills before the CLI, or roll back an editable install, and every turn
   becomes a loop. `|| exit 0` makes the hook incapable of doing that.
-- **`--out "$CLAUDE_PROJECT_DIR/.chatexports"`.** Without it the output directory is
-  `cwd/.chatexports`, and the hook's working directory is not something to assume — least
-  of all in a project with nested settings files.
+- **`--out` must name the project root explicitly.** Without it the output directory is
+  `cwd/.chatexports`, and a hook's working directory is not something to assume. But
+  `$CLAUDE_PROJECT_DIR` is only right when the harness was opened at the project root.
+  In Roy's layout the project root is the outer shell (`PJ-OD\C2M\`) and the repo sits
+  inside it, so a session opened in the repo makes `$CLAUDE_PROJECT_DIR` the *repo* --
+  and the hook would then write transcripts into the repo's working tree, which is the
+  one outcome to avoid. **Resolve the project root when you install the hook and write
+  that absolute path into the command**, rather than relying on the variable. Confirm it
+  against where that project's existing `.chatexports\` already is.
 - **`--callsign auto`** is the default, so the recipes below do not need it. xexport
   reads an existing registry directly — it never runs `claim.py`, and never creates or
   mutates a registry. For a main session it matches the session id against the registry's
@@ -111,8 +117,16 @@ a **new** project rather than assumed:
 
 - An export file carries whatever was on screen. Sending one to someone, or attaching it
   to an issue, sends the credentials and customer data that passed through that chat too.
-- `.chatexports\` must be gitignored unless the user wants transcripts committed. It is
-  **not** currently ignored in Chat-to-Markdown or PracticeHub. Check, do not assume.
+- **Do not add `.chatexports\` to a `.gitignore` on your own initiative.** Roy's layout
+  puts it at the *project root* -- the outer shell folder, one level below the projects
+  directory (`PJ-OD\C2M\`, `PJ-OD\PracticeHub\`) -- while the repo or repos live
+  *inside* that. A project may have more than one repo. Some projects deliberately keep a
+  **private** repo at the project-root level whose whole job is to capture private
+  material including `.chatexports`, so ignoring it there defeats the point.
+
+  The thing that actually matters is that transcripts never land inside a **public**
+  repo's working tree. Get that right by exporting to the project root, not by ignoring
+  files after the fact. Ask before touching any `.gitignore`.
 
 `--brief` (user and assistant text only) remains available for any project where that
 trade lands differently.
@@ -216,9 +230,10 @@ optional flag.
    installed. Resolve it (`(Get-Command xexport).Source`, or `command -v xexport`) and
    put the **absolute path** in the hook command if there is any doubt. Verify by
    running the hook from the app you actually use, not from a terminal.
-3. Confirm `.chatexports\` is in the project's `.gitignore`. Add it if not — do not skip
-   this because "it probably is". These receipts are full-fidelity (see above), so an
-   unignored `.chatexports\` commits tool output and anything sensitive in it.
+3. Confirm the export root is the **project root** (the outer shell), not a repo inside
+   it. These receipts are full-fidelity, so a transcript landing in a public repo's
+   working tree is the failure that matters -- not whether it is gitignored. Do not edit
+   any `.gitignore` without asking.
 4. Find every `.claude\settings.json` in the project and decide which one owns the
    policy. Install in exactly one.
 5. Back up that file, merge the hooks, restart the session, and confirm a file appears

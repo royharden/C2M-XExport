@@ -555,9 +555,10 @@ def common_options(f):
                      help="Override the {title} part of the export name.")(f)
     f = click.option("--mode", type=click.Choice(_MODE_CHOICES),
                      default="append", show_default=True,
-                     help="append (default): add only the new turns to this session's "
-                          "existing export, creating it if there is none. "
-                          "new: always a fresh export. replace: overwrite it.")(f)
+                     help="append (default): refresh this session's existing export "
+                          "so it holds the whole conversation, creating it if there is "
+                          "none. new: always a separate fresh copy. replace: refresh "
+                          "past the shrink and fidelity guards.")(f)
     f = click.option("--append", is_flag=True,
                      help="Shorthand for --mode append.")(f)
     f = click.option("--callsign", default="auto",
