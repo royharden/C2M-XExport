@@ -72,6 +72,29 @@ class Options:
             truncate=0 if self.full else 2000,
         )
 
+    @property
+    def html_kwargs(self) -> dict:
+        """The same content filters, minus truncation.
+
+        --brief/--no-tools/--no-thinking are privacy controls and must reach every
+        format. --full only sets a Markdown truncation width; HTML truncates in the
+        browser via the expand control, so it is deliberately absent here.
+        """
+        return dict(
+            brief=self.brief,
+            include_tools=not self.no_tools,
+            include_thinking=not self.no_thinking,
+        )
+
+    @property
+    def html_opts_fingerprint(self) -> str:
+        """Fingerprint of the options that change HTML content.
+
+        Held apart from the Markdown one so that --full, which HTML ignores, does
+        not make an HTML export look incompatible with itself.
+        """
+        return cursors.options_fingerprint(**self.html_kwargs, truncate=0)
+
 
 def _options(kw: dict) -> Options:
     """Build Options from click kwargs, resolving the --append alias.
@@ -320,7 +343,8 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
     run = 1
 
     if opt.mode in ("append", "replace"):
-        existing = cursors.find_html_export(html_dir, session)
+        existing = cursors.find_html_export(html_dir, session,
+                                            opt.html_opts_fingerprint)
         if existing is None:
             _say_once(opt, "no-previous",
                       f"Note: no previous export found for session "
@@ -328,7 +352,8 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
 
     if existing is not None:
         folder, data = existing
-        verdict, detail = cursors.validate(data, session)
+        verdict, detail = cursors.validate(data, session,
+                                           opts=opt.html_opts_fingerprint)
         if verdict in ("mismatch", "unsupported"):
             # Same guard as the Markdown path. Without it a mismatch re-rendered the
             # folder in place, overwriting index.html and deleting the now-surplus
@@ -344,9 +369,10 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
             )
         else:
             run = int(data.get("run") or 1) + 1
-            index_path = render_html(session, folder)
-            cursors.write_html_marker(
-                folder, cursors.make(session, messages=total, run=run))
+            index_path = render_html(session, folder, **opt.html_kwargs)
+            cursors.write_html_marker(folder, cursors.make(
+                session, messages=total, run=run,
+                opts=opt.html_opts_fingerprint))
             return index_path, "wrote", ""
 
     html_dir.mkdir(parents=True, exist_ok=True)
@@ -354,8 +380,9 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
     if opt.mode != "new" and folder.name != name:
         _warn(f"Warning: {name}\\ already exists but could not be extended; "
               f"wrote {folder.name}\\ instead.")
-    index_path = render_html(session, folder)
-    cursors.write_html_marker(folder, cursors.make(session, messages=total, run=run))
+    index_path = render_html(session, folder, **opt.html_kwargs)
+    cursors.write_html_marker(folder, cursors.make(
+        session, messages=total, run=run, opts=opt.html_opts_fingerprint))
     return index_path, "wrote", ""
 
 

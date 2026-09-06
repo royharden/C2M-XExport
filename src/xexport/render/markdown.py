@@ -19,6 +19,7 @@ from ..model import (
     ASSISTANT_TEXT, RAW, THINKING, TOOL_CALL, TOOL_RESULT, USER_TEXT,
     Session,
 )
+from . import filtered
 
 _TICKS = re.compile(r"`+")
 
@@ -111,9 +112,11 @@ def render_markdown(
     start_index: int = 0,
     header: bool = True,
 ) -> str:
-    if brief:
-        include_tools = False
-        include_thinking = False
+    # One predicate for both renderers - see render/__init__.filtered.
+    session = filtered(session, brief=brief, include_tools=include_tools,
+                       include_thinking=include_thinking)
+    include_tools = include_tools and not brief
+    include_thinking = include_thinking and not brief
 
     label = session.assistant_label
     lines: list[str] = _header_lines(session) if header else []

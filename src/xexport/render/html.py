@@ -18,6 +18,7 @@ from markupsafe import Markup
 
 from .. import __version__
 from ..model import ASSISTANT_TEXT, TOOL_CALL, USER_TEXT, Message, Session
+from . import filtered
 
 PROMPTS_PER_PAGE = 5
 LONG_TEXT_MIN_CHARS = 400  # closing answers longer than this get an index preview
@@ -94,8 +95,16 @@ def _group_long_text(group: list[Message]) -> str:
     return ""
 
 
-def render_html(session: Session, out_dir: Path) -> Path:
-    """Write index.html + page-NNN.html into out_dir; return the index path."""
+def render_html(session: Session, out_dir: Path, *, brief: bool = False,
+                include_tools: bool = True, include_thinking: bool = True) -> Path:
+    """Write index.html + page-NNN.html into out_dir; return the index path.
+
+    The content filters are applied here rather than by the caller so that
+    prompt grouping, the index counters and `session.stats()` all describe the
+    document that was actually written.
+    """
+    session = filtered(session, brief=brief, include_tools=include_tools,
+                       include_thinking=include_thinking)
     out_dir.mkdir(parents=True, exist_ok=True)
     env = _env()
     exported = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
@@ -116,7 +125,11 @@ def render_html(session: Session, out_dir: Path) -> Path:
         for group in page_groups:
             first_anchor = anchor
             for m in group:
-                views.append(_role_view(m, session, anchor))
+                # A message stripped bare by a filter would render as an empty
+                # card; skip drawing it, but still spend its anchor so numbering
+                # matches the unfiltered transcript.
+                if m.blocks:
+                    views.append(_role_view(m, session, anchor))
                 anchor += 1
             prompt_number += 1
             ts = next((m.timestamp for m in group if m.timestamp), "")
