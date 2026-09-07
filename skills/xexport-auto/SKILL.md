@@ -131,15 +131,43 @@ a **new** project rather than assumed:
 `--brief` (user and assistant text only) remains available for any project where that
 trade lands differently.
 
-**Verify the payload before relying on it.** Run the hook command by hand once with a
-sample payload and confirm the file it writes is the session you expect:
+### The payload, as measured
 
-```bash
-echo '{"session_id":"<a real session id>"}' | xexport current --from-hook --format md --mode append --out .chatexports
-```
+Captured from a real `SubagentStop` on 2026-09-07 by installing a hook that wrote its
+stdin to a file. **Do not take this from documentation** — a docs summary consulted the
+same day got two of these backwards, and both are the ones that matter:
 
-If `--from-hook` picks the wrong session, fall back to the payload-independent form:
-`xexport current --session-id "$CLAUDE_CODE_SESSION_ID" ...`.
+| field | value on `SubagentStop` |
+|---|---|
+| `transcript_path` | the **parent's** transcript, *not* the child's |
+| `agent_transcript_path` | the **child's** own transcript (`…/<parent-id>/subagents/agent-<hex>.jsonl`) |
+| `session_id` | the **parent's** session id |
+| `agent_id` | the child's own id (`a4795223d8b0d70c1`) |
+| `last_assistant_message` | the child's final text |
+| `cwd` | the project root the session was opened at |
+| `stop_hook_active` | `false` — set when a `Stop` hook is already running, so a hook can avoid recursing |
+
+Also present: `hook_event_name`, `agent_type`, `prompt_id`, `permission_mode`, `effort`,
+`scratchpad_dir`, `background_tasks`, `session_crons`.
+
+That first row is the whole reason `xexport subagents --from-hook` refuses a path that is
+not under a `subagents\` directory: a `SubagentStop` hook that trusted `transcript_path`
+would export the **parent** into the file the `Stop` hook maintains, and report that no
+subagents were found. It reads `agent_transcript_path` first and treats the rest as
+fallback.
+
+**Hooks are re-read from disk mid-session** — a file watcher picks up edits to
+`settings.json`, confirmed by the capture above firing without a restart. Convenient for
+testing, and worth knowing before you edit a live project's settings.
+
+**Exit codes:** only **2** blocks a `Stop` and feeds stderr back to the model; 1 and other
+non-zero codes are non-blocking errors. That is why an unknown flag (click's usage error,
+exit 2) is the dangerous one and `|| exit 0` is the backstop.
+
+**Re-verify the payload before relying on it in a new build.** Install a hook that writes
+its stdin to a file, trigger one event, read it back — that is how the table above was
+made. If `--from-hook` still picks the wrong session, fall back to the payload-independent
+form: `xexport current --session-id "$CLAUDE_CODE_SESSION_ID" ...`.
 
 ### Alternatives to `Stop`
 

@@ -272,3 +272,83 @@ class TestSubagentTitleFallback:
         assert written, [p.name for p in out.glob("*.md")]
         assert "Audit the retry logic" in written[0]
         assert "callsign" not in written[0].lower()
+
+
+class TestRealSubagentStopPayload:
+    """Built from a SubagentStop payload captured on this machine, 2026-09-07.
+
+    The two facts that matter, and that documentation summaries get wrong:
+    `transcript_path` is the PARENT's file, and `session_id` is the PARENT's id.
+    The child's own transcript is `agent_transcript_path`, and its own id is
+    `agent_id`.
+    """
+
+    def _payload(self, store, child):
+        return json.dumps({
+            "hook_event_name": "SubagentStop",
+            "session_id": CLAUDE_SESSION_ID,                 # the PARENT's id
+            "agent_id": child.stem.replace("agent-", ""),
+            "agent_type": "general-purpose",
+            "transcript_path": str(_transcript(store)),      # the PARENT's file
+            "agent_transcript_path": str(child),             # the child's own file
+            "last_assistant_message": "done",
+            "cwd": str(store),
+            "stop_hook_active": False,
+            "permission_mode": "bypassPermissions",
+        })
+
+    def _child(self, store):
+        folder = (store / "projects" / "C--proj" / CLAUDE_SESSION_ID / "subagents")
+        child = folder / "agent-a4795223d8b0d70c1.jsonl"
+        _jsonl(child, [
+            {"isSidechain": True, "type": "user", "sessionId": CLAUDE_SESSION_ID,
+             "timestamp": "2026-09-07T10:00:00.000Z",
+             "message": {"role": "user", "content": "Reply with exactly: done"}},
+            {"isSidechain": True, "type": "assistant", "sessionId": CLAUDE_SESSION_ID,
+             "timestamp": "2026-09-07T10:00:02.000Z",
+             "message": {"role": "assistant",
+                         "content": [{"type": "text", "text": "done"}]}},
+        ])
+        (folder / "agent-a4795223d8b0d70c1.meta.json").write_text(
+            json.dumps({"description": "Trivial hook trigger",
+                        "agentType": "general-purpose"}), encoding="utf-8")
+        return child
+
+    def test_the_child_transcript_is_exported_not_the_parent(self, claude_store,
+                                                             tmp_path):
+        child = self._child(claude_store)
+        out = tmp_path / "exports"
+        r = CliRunner().invoke(
+            main, ["subagents", "--from-hook", "--format", "md", "--out", str(out)],
+            input=self._payload(claude_store, child))
+        assert r.exit_code == 0, r.output
+        written = list(out.glob("*.md"))
+        assert len(written) == 1, [p.name for p in written]
+        # Named for the CHILD, from its meta description and its own agent id.
+        assert "Trivial hook trigger" in written[0].name
+        assert "claude-agent-a4795223d8b0d70c1" in written[0].name
+        body = written[0].read_text(encoding="utf-8")
+        assert "Reply with exactly: done" in body
+        # Nothing from the parent transcript leaked into the child's receipt.
+        assert "My Renamed Chat" not in body
+        assert "please fix the bug" not in body
+
+    def test_a_payload_with_only_the_parent_path_does_not_export_the_parent(
+            self, claude_store, tmp_path):
+        """The guard that matters if a harness stops sending agent_transcript_path."""
+        self._child(claude_store)
+        payload = json.dumps({
+            "hook_event_name": "SubagentStop",
+            "session_id": CLAUDE_SESSION_ID,
+            "transcript_path": str(_transcript(claude_store)),
+            "last_assistant_message": "done",
+        })
+        out = tmp_path / "exports"
+        r = CliRunner().invoke(
+            main, ["subagents", "--from-hook", "--format", "md", "--out", str(out)],
+            input=payload)
+        assert r.exit_code == 0, r.output
+        written = list(out.glob("*.md"))
+        assert written, r.output
+        # It falls back to enumerating the parent's children -- never exports the parent.
+        assert all("claude-agent-" in p.name for p in written), [p.name for p in written]

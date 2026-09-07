@@ -755,15 +755,21 @@ def subagents_cmd(session_id, from_hook, source, **kw):
 
     if from_hook:
         payload = _hook_payload()
+        # Verified against a real SubagentStop payload on 2026-09-07: the child's own
+        # transcript is `agent_transcript_path`, while `transcript_path` holds the
+        # PARENT's file and `session_id` holds the PARENT's id. Prefer the exact field;
+        # everything after it is the fallback for a harness that does not send one.
+        child = str(payload.get("agent_transcript_path") or "").strip()
         hook_path = str(payload.get("transcript_path") or "").strip()
-        # Only honour a hook path that really is a subagent transcript. A SubagentStop
-        # payload may carry the MAIN transcript, and exporting that here would write
-        # the parent into the same file the Stop hook maintains while reporting that
-        # no subagents were found — the failure mode is completely silent.
-        if hook_path and Path(hook_path).is_file() and claude.is_subagent_path(Path(hook_path)):
-            path = Path(hook_path)
-            _export(_parse(path, _sniff_source(path)), opt)
-            return
+        for candidate in (child, hook_path):
+            # Only honour a path that really is a subagent transcript. Exporting the
+            # parent here would write it into the same file the Stop hook maintains
+            # while reporting that no subagents were found - silently wrong.
+            if (candidate and Path(candidate).is_file()
+                    and claude.is_subagent_path(Path(candidate))):
+                path = Path(candidate)
+                _export(_parse(path, _sniff_source(path)), opt)
+                return
         session_id = session_id or str(payload.get("session_id") or "").strip() or None
         if hook_path and not session_id:
             # …/<project>/<parent-session-id>/subagents/… or …/<parent>.jsonl
