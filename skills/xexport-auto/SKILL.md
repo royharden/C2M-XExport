@@ -208,11 +208,23 @@ Before your final reply in any session, export this chat:
   "Up to date" when there is nothing to add.
 - If you spawned subagents, also run:
   `xexport subagents --session-id "<your session id>" --format md --mode append --out "<project root>\.chatexports"`
+- **If you are a subagent (a parent agent named you), run neither command.** A Codex or
+  Cursor subagent inherits its parent's session id, so `xexport current` from a subagent
+  exports the *parent's* transcript under the *child's* callsign. Your parent runs
+  `xexport current` for the session and `xexport subagents` for you.
+- A receipt path you quote to another agent is a location, not permission to read it:
+  transcripts hold the user's prompts and tool output.
 <!-- xexport-auto:end -->
 ```
 
 Keep the `xexport-auto:begin/end` markers: they are what makes re-running this skill
 idempotent instead of appending a second copy.
+
+**Why the subagent line is there (found 2026-09-08 during the A-Mail cross-harness
+trial):** a Codex subagent that followed the block literally exported its parent's whole
+thread under its own callsign, because `CODEX_THREAD_ID` is inherited. Claude Code is
+not affected: its `SubagentStop` hook reads `agent_transcript_path`. Projects that
+already carry the block (for example the A-Mail constitution) should add the same line.
 
 ## Adding it to a priming / constitution skill
 
