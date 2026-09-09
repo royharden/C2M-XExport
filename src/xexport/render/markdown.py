@@ -3,6 +3,10 @@
 Shape follows the codex-export style Roy liked (## 👤 / 🤖 headings), with
 collapsible <details> for thinking and tool output so long sessions stay
 skimmable on GitHub/Obsidian.
+
+An export is always the whole session; there is no partial render. Refreshing one
+re-renders it, which is what makes an edited, retried or compacted transcript come
+out correct rather than merely being detected as inconsistent.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from ..model import (
     ASSISTANT_TEXT, RAW, THINKING, TOOL_CALL, TOOL_RESULT, USER_TEXT,
     Session,
 )
+from . import filtered
 
 _TICKS = re.compile(r"`+")
 
@@ -32,24 +37,14 @@ def _truncate(text: str, limit: int) -> str:
     return f"{text[:limit]}\n… (+{len(text) - limit:,} chars truncated — use --full for everything)"
 
 
-def render_markdown(
-    session: Session,
-    *,
-    brief: bool = False,
-    include_tools: bool = True,
-    include_thinking: bool = True,
-    truncate: int = 2000,
-) -> str:
-    if brief:
-        include_tools = False
-        include_thinking = False
-
-    label = session.assistant_label
-    lines: list[str] = [f"# {session.title}", ""]
+def _header_lines(session: Session) -> list[str]:
+    lines = [f"# {session.title}", ""]
     meta = [f"- **Source:** {session.app or session.source}"]
     if session.model:
         meta[0] += f" ({session.model})"
     meta.append(f"- **Session:** `{session.session_id}`")
+    if session.is_subagent and session.parent_session_id:
+        meta.append(f"- **Subagent of:** `{session.parent_session_id}`")
     if session.cwd:
         meta.append(f"- **Workspace:** `{session.cwd}`")
     if session.started:
@@ -60,6 +55,25 @@ def render_markdown(
     )
     lines.extend(meta)
     lines.extend(["", "---", ""])
+    return lines
+
+
+def render_markdown(
+    session: Session,
+    *,
+    brief: bool = False,
+    include_tools: bool = True,
+    include_thinking: bool = True,
+    truncate: int = 2000,
+) -> str:
+    # One predicate for both renderers - see render/__init__.filtered.
+    session = filtered(session, brief=brief, include_tools=include_tools,
+                       include_thinking=include_thinking)
+    include_tools = include_tools and not brief
+    include_thinking = include_thinking and not brief
+
+    label = session.assistant_label
+    lines: list[str] = _header_lines(session)
 
     for message in session.messages:
         for block in message.blocks:

@@ -47,6 +47,8 @@ class Session:
     started: str = ""
     model: str = ""
     app: str = ""  # e.g. "Claude Code", "Codex Desktop", "Codex CLI", "Cursor"
+    is_subagent: bool = False
+    parent_session_id: str = ""   # the session that spawned this subagent
     messages: list[Message] = field(default_factory=list)
 
     @property

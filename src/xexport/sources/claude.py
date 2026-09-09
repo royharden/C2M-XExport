@@ -5,7 +5,12 @@ and may drift; unknown entries degrade to RAW blocks, never crash):
 
     ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl   transcript
     ~/.claude/projects/<encoded-cwd>/<session-id>/subagents/*.jsonl
+    ~/.claude/projects/<encoded-cwd>/<session-id>/subagents/agent-<hex>.meta.json
     ~/.claude/sessions/<pid>.json                          live-session registry
+
+Every line of a subagent transcript carries "isSidechain": true, so the sidechain
+filter that keeps a parent transcript clean has to be lifted when the file being
+parsed *is* the subagent's own transcript.
 
 The chat title shown in the apps is written into the transcript as
 {"type": "ai-title", "aiTitle": "..."} lines — the last one wins.
@@ -19,6 +24,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import agentnamer
 from ..model import (
     ASSISTANT_TEXT, RAW, THINKING, TOOL_CALL, TOOL_RESULT, USER_TEXT,
     Block, Message, Session,
@@ -51,6 +57,35 @@ def encode_project_dir(cwd: str | Path) -> str:
     C:\\Users\\Roy Harden\\X -> C--Users-Roy-Harden-X
     """
     return re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+
+
+def is_subagent_path(path: Path) -> bool:
+    return "subagents" in {p.lower() for p in path.parts}
+
+
+def subagent_meta(path: Path) -> dict:
+    """`agent-<id>.meta.json` sits beside the transcript.
+
+    Observed shape: {"agentType": "general-purpose",
+                     "description": "Summarize existing canonical skills",
+                     "toolUseId": "toolu_..."}
+    `description` is the one-line task the parent wrote - a far better title than
+    anything derivable from the transcript body, whose first user message is the
+    parent's full instructions.
+    """
+    meta_path = path.parent / f"{path.stem}.meta.json"
+    try:
+        obj = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _subagent_title(path: Path) -> str:
+    meta = subagent_meta(path)
+    return (str(meta.get("description") or "").strip()
+            or str(meta.get("agentType") or "").strip()
+            or path.stem)
 
 
 @dataclass
@@ -102,9 +137,22 @@ def _tool_detail(name: str, tool_input) -> str:
     )
 
 
-def parse_file(path: Path) -> Session:
+def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
+    """Parse one transcript.
+
+    `include_sidechain` defaults to "yes if this file IS a subagent transcript".
+    A parent transcript still drops sidechain lines (they duplicate the subagent's
+    own file); a subagent transcript keeps them, because that is all it contains.
+    """
+    if include_sidechain is None:
+        include_sidechain = is_subagent_path(path)
     session = Session(source="claude", session_id=path.stem, path=path,
                       app="Claude Code")
+    if include_sidechain:
+        session.is_subagent = True
+        session.app = "Claude Code subagent"
+        #  .../<encoded-cwd>/<parent-session-id>/subagents/<file>.jsonl
+        session.parent_session_id = path.parent.parent.name
     title = ""
     custom_title = ""
     summary_fallback = ""
@@ -151,7 +199,7 @@ def parse_file(path: Path) -> Session:
                 ))
                 continue
 
-            if obj.get("isSidechain") or obj.get("isMeta"):
+            if (obj.get("isSidechain") and not include_sidechain) or obj.get("isMeta"):
                 continue
 
             if not session.cwd and obj.get("cwd"):
@@ -233,8 +281,20 @@ def parse_file(path: Path) -> Session:
 
     user_fallback = ""
     if first_user_text.strip():
-        user_fallback = first_user_text.strip().splitlines()[0][:80]
-    session.title = (custom_title or title or summary_fallback
+        text = first_user_text
+        if include_sidechain:
+            # A subagent's opening prompt begins with the callsign line its parent
+            # wrote ("Your callsign is 0009_... (parent 0007). Do not claim..."),
+            # which is assignment boilerplate, not what the subagent was asked to
+            # do. Only reached when the .meta.json sidecar is missing.
+            text = agentnamer.strip_assignment_preamble(text)
+        user_fallback = text.strip().splitlines()[0][:80] if text.strip() else ""
+    meta_title = ""
+    if include_sidechain:
+        meta = subagent_meta(path)
+        meta_title = (str(meta.get("description") or "").strip()
+                      or str(meta.get("agentType") or "").strip())
+    session.title = (custom_title or title or meta_title or summary_fallback
                      or user_fallback or session.session_id)
     return session
 
@@ -281,7 +341,7 @@ def _quick_title(path: Path, max_bytes: int = 4_000_000) -> str:
     return result or path.stem
 
 
-def list_sessions(limit: int = 15) -> list[SessionInfo]:
+def list_sessions(limit: int = 15, *, subagents: bool = False) -> list[SessionInfo]:
     root = projects_dir()
     if not root.is_dir():
         return []
@@ -289,14 +349,36 @@ def list_sessions(limit: int = 15) -> list[SessionInfo]:
         p for p in root.glob("*/*.jsonl")
         if _UUID_RE.match(p.stem)
     ]
+    if subagents:
+        files.extend(root.glob("*/*/subagents/agent-*.jsonl"))
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     infos = []
     for p in files[:limit]:
         infos.append(SessionInfo(
             source="claude", session_id=p.stem, path=p,
-            title=_quick_title(p), mtime=p.stat().st_mtime,
+            title=(_subagent_title(p) if is_subagent_path(p) else _quick_title(p)),
+            mtime=p.stat().st_mtime,
         ))
     return infos
+
+
+def list_subagents(parent_session_id: str) -> list[SessionInfo]:
+    """Every subagent transcript belonging to one parent session, oldest first."""
+    root = projects_dir()
+    if not root.is_dir() or not parent_session_id:
+        return []
+    files = sorted(root.glob(f"*/{parent_session_id}/subagents/agent-*.jsonl"))
+    if not files:
+        # Tolerate a partial parent id, the way find_session does.
+        files = sorted(
+            p for p in root.glob("*/*/subagents/agent-*.jsonl")
+            if parent_session_id.lower() in p.parent.parent.name.lower()
+        )
+    return [
+        SessionInfo(source="claude", session_id=p.stem, path=p,
+                    title=_subagent_title(p), mtime=p.stat().st_mtime)
+        for p in files
+    ]
 
 
 def find_session(session_id: str) -> Path | None:
@@ -305,5 +387,10 @@ def find_session(session_id: str) -> Path | None:
         return None
     matches = list(root.glob(f"*/{session_id}.jsonl"))
     if not matches:
+        matches = list(root.glob(f"*/*/subagents/{session_id}.jsonl"))
+    if not matches:
         matches = [p for p in root.glob("*/*.jsonl") if session_id in p.stem]
+    if not matches:
+        matches = [p for p in root.glob("*/*/subagents/agent-*.jsonl")
+                   if session_id in p.stem]
     return matches[0] if matches else None

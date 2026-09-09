@@ -19,6 +19,22 @@ browser DOM).
   the Windows default codepage — that's the cp1252 crash class this tool exists to avoid.
 - Unknown jsonl entry types must degrade to Raw blocks, never crash an export.
 - Bug fixed ⇒ regression test added, with a comment saying what bug it catches.
+- **Subagent transcripts are sidechains by definition.** Every line of
+  `...\<session>\subagents\agent-*.jsonl` carries `isSidechain: true`. The filter that
+  keeps a *parent* transcript clean must stay lifted for a subagent's own file — see
+  `claude.parse_file(include_sidechain=...)`. Getting this backwards produces an export
+  with zero messages and no error, which is how it went unnoticed until 0.2.0.
+- **An export is refreshed by re-rendering it, never by appending to it.** Re-parse,
+  render the whole document, write it through `publish.atomic_write_text`. That is what
+  makes an edited, retried or compacted transcript come out right. If you find yourself
+  reaching for `open(path, "a")`, the design has drifted.
+- **A refresh may never quietly produce a worse export.** Re-render will happily overwrite
+  a good export with a lesser one, so before writing over an existing file check its
+  cursor record: refuse a transcript shorter than what was exported, and refuse a
+  different set of content filters. Only `--mode replace` overrides those.
+- **The content filters are privacy controls, not Markdown styling.** `--brief`,
+  `--no-tools` and `--no-thinking` must reach every format a run produces. Filter on the
+  neutral model in `render/__init__.filtered`, never in one renderer.
 
 ## Layout
 
@@ -28,8 +44,12 @@ browser DOM).
 - `src/xexport/render/` — `markdown.py`; `html.py` + `templates/` (adapted from
   claude-code-transcripts, Apache-2.0 — keep the NOTICE attribution).
 - `src/xexport/titles.py` — Windows-safe name sanitization; `detect.py` — current-session detection.
+- `src/xexport/naming.py` — export names: the `{agent} -- {title} -- {identity}` template
+  and AgentNamer callsign resolution. `agentnamer.py` — read-only lookup of an existing
+  callsign registry. `cursors.py` — the record each export keeps of what it was made
+  from. `publish.py` — atomic writes and the per-session lock.
 - `src/xexport/cli.py` — click CLI; console script `xexport`.
-- Skills: canonical copies live in `PJ-OD\skills\xexport-html|md\` (NOT in this repo);
+- Skills: canonical copies live in `PJ-OD\skills\xexport-html|md|auto\` (NOT in this repo);
   `skills/` here holds the templates they are generated from. Follow the
   `sync-skills-across-agents` skill for any skill change.
 
