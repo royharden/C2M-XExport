@@ -140,6 +140,7 @@ def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
         title=_summary_title(folder),
     )
     first_user_text = ""
+    seen_turn = False   # set once a user/assistant/tool entry has been read
 
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -159,7 +160,7 @@ def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
             if not isinstance(obj, dict):
                 continue
             ltype = obj.get("type")
-            if ltype == "system" and not session.messages:
+            if ltype == "system" and not seen_turn:
                 continue  # the opening preamble; a later system entry is kept as a raw block
             if ltype == "reasoning":
                 text = _reasoning_text(obj)
@@ -172,6 +173,7 @@ def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
                     )
                 continue
             if ltype == "assistant":
+                seen_turn = True
                 if not session.model:
                     session.model = str(obj.get("model_id") or obj.get("model") or "")
                 blocks: list[Block] = []
@@ -212,6 +214,7 @@ def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
                     session.messages.append(Message(role="assistant", blocks=blocks))
                 continue
             if ltype == "tool_result":
+                seen_turn = True
                 session.messages.append(
                     Message(
                         role="tool",
@@ -226,6 +229,7 @@ def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
                 )
                 continue
             if ltype == "user":
+                seen_turn = True
                 user_blocks: list[Block] = []
                 content = obj.get("content")
                 if isinstance(content, str) and content.strip():

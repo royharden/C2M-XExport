@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -60,6 +61,12 @@ def _add_session(home: Path, session_id: str, prompt: str, *, cwd: str = FIXTURE
 
 def _markdown(out: Path) -> list[Path]:
     return sorted(out.glob("*.md"))
+
+
+def _git_init(path: Path) -> None:
+    """Make `path` its own git root. AgentNamer's registry lookup then starts and stops
+    there, whatever registry or checkout the host keeps above pytest's temp directory."""
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
 
 
 class TestSniffSource:
@@ -167,6 +174,7 @@ class TestSubagents:
     def family(self, grok_store, tmp_path, monkeypatch):
         _add_session(grok_store, CHILD, "Review the parser")
         _add_session(grok_store, STRANGER, "Somebody else's subagent")
+        _git_init(tmp_path)
         self._registry(tmp_path)
         monkeypatch.chdir(tmp_path)
         return tmp_path
@@ -192,7 +200,8 @@ class TestSubagents:
     def test_without_a_registry_there_is_nothing_to_export(self, grok_store, tmp_path,
                                                           monkeypatch):
         _add_session(grok_store, CHILD, "Review the parser")
-        monkeypatch.chdir(tmp_path)                 # no .agent-registry anywhere above it
+        _git_init(tmp_path)                         # its own git root: nothing above it is consulted
+        monkeypatch.chdir(tmp_path)
         out = tmp_path / "exports"
         r = _run("subagents", "--source", "grok", "--session-id", PARENT,
                  "--format", "md", "--out", str(out))
@@ -218,6 +227,24 @@ class TestSystemEntries:
         session = grok.parse_file(self._session(tmp_path, []))
         texts = [b.text for m in session.messages for b in m.blocks]
         assert not any("You are Grok" in t for t in texts)
+
+    def test_preamble_after_an_unparseable_line_is_still_skipped(self, tmp_path):
+        # what_bug_this_catches: the preamble test was "no messages read yet", and an
+        # unparseable line becomes a raw message, so a junk first line turned the real
+        # preamble into a raw block in the export.
+        path = self._session(tmp_path, [])
+        path.write_text("not json at all\n" + path.read_text(encoding="utf-8"), encoding="utf-8")
+        raw = [b for m in grok.parse_file(path).messages for b in m.blocks if b.kind == RAW]
+        assert [b.name for b in raw] == ["unparseable line"]
+        assert not any("You are Grok" in b.text for b in raw)
+
+    def test_every_leading_system_entry_is_skipped(self, tmp_path):
+        path = self._session(tmp_path, [])
+        lines = path.read_text(encoding="utf-8").splitlines()
+        lines.insert(1, json.dumps({"type": "system", "content": "A second preamble."}))
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        texts = [b.text for m in grok.parse_file(path).messages for b in m.blocks]
+        assert not any("preamble" in t or "You are Grok" in t for t in texts)
 
     def test_a_later_system_entry_is_kept_as_a_raw_block(self, tmp_path):
         # what_bug_this_catches: every `system` entry was dropped, so a mid-conversation
