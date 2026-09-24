@@ -91,9 +91,61 @@ def _format_output(output) -> str:
     return _pretty_json(parsed)
 
 
+def _identity(payload: dict, path: Path, *, check_filename: bool = True) -> tuple[str, str, str, bool]:
+    """Observed native format (2026-09-09): id is child, session_id is parent.
+
+    Older main-session formats may carry session_id alone. Conflicting identities
+    are errors, including for path-based exports and --mode replace.
+    """
+    source = payload.get("source")
+    sub = source.get("subagent") if isinstance(source, dict) else None
+    spawn = sub.get("thread_spawn") if isinstance(sub, dict) else None
+    spawn = spawn if isinstance(spawn, dict) else {}
+    sid = payload.get("id") or payload.get("session_id") or ""
+    parent = spawn.get("parent_thread_id") or ""
+    child = bool(spawn) or payload.get("thread_source") == "subagent"
+    agent_path = spawn.get("agent_path") or ""
+
+    def fail(detail: str):
+        raise ValueError(f"Codex identity conflict in {path.name}: {detail}")
+
+    if not isinstance(sid, str) or not sid:
+        fail("missing thread id")
+    if child:
+        if not payload.get("id") or not parent or sid == parent:
+            fail("native child requires its own id and explicit distinct parent_thread_id")
+        if payload.get("session_id") not in (None, "", sid, parent):
+            fail("session_id does not match child or parent")
+    elif payload.get("id") and payload.get("session_id") not in (None, "", sid):
+        fail("id and session_id disagree without native child metadata")
+    if payload.get("parent_thread_id") not in (None, "", parent):
+        fail("parent_thread_id fields disagree")
+    if payload.get("agent_path") not in (None, "", agent_path):
+        fail("agent_path fields disagree")
+    match = _UUID_RE.search(path.name)
+    if check_filename and match and match.group(1) != sid:
+        fail("filename thread id disagrees with metadata")
+    return sid, parent, agent_path, child
+
+
+def _read_meta(path: Path) -> dict | None:
+    """Discovery reads the metadata header only, never conversation bodies."""
+    with path.open(encoding="utf-8", errors="replace") as f:
+        try:
+            record = json.loads(f.readline())
+        except json.JSONDecodeError:
+            return None  # A new active rollout may not have a complete header yet.
+    if isinstance(record, dict) and record.get("type") == "session_meta":
+        payload = record.get("payload")
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
 def parse_file(path: Path) -> Session:
     session = Session(source="codex", session_id="", path=path, app="Codex")
     first_user_meta = ""
+    header_prefix = True
+    expected_ancestor = ""
 
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -103,12 +155,14 @@ def parse_file(path: Path) -> Session:
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
+                header_prefix = False
                 session.messages.append(Message(
                     role="assistant",
                     blocks=[Block(kind=RAW, text=line[:2000], name="unparseable line")],
                 ))
                 continue
             if not isinstance(obj, dict):
+                header_prefix = False
                 continue
 
             etype = obj.get("type")
@@ -116,15 +170,42 @@ def parse_file(path: Path) -> Session:
             payload = obj.get("payload") or {}
 
             if etype == "session_meta":
-                session.session_id = payload.get("session_id") or payload.get("id", "")
+                if session.session_id:
+                    canonical = (session.session_id, session.parent_session_id,
+                                 session.agent_path, session.is_subagent)
+                    candidate = _identity(payload, path, check_filename=False)
+                    if candidate == canonical:
+                        # A repeated canonical envelope cannot overwrite title/cwd.
+                        continue
+                    sid, parent, _, _ = candidate
+                    # A full-history native child starts with its own envelope,
+                    # then the copied parent's envelope (possibly recursively).
+                    # Only that contiguous, explicitly linked prefix is admissible.
+                    if (header_prefix and session.is_subagent and expected_ancestor
+                            and sid == expected_ancestor
+                            and sid != session.session_id
+                            and sid not in session.inherited_session_ids
+                            and parent not in [session.session_id, *session.inherited_session_ids]):
+                        session.inherited_session_ids.append(sid)
+                        expected_ancestor = parent
+                        continue
+                    raise ValueError(f"Codex identity conflict in {path.name}: "
+                                     "metadata is not an explicitly linked ancestor header")
+                sid, parent, agent_path, child = _identity(payload, path)
+                session.session_id = sid
+                session.parent_session_id = parent
+                session.agent_path = agent_path
+                session.is_subagent = child
                 session.cwd = payload.get("cwd", "")
                 session.started = payload.get("timestamp", "")
                 session.app = payload.get("originator") or "Codex"
                 first_user_meta = payload.get("first_user_message", "") or ""
+                expected_ancestor = parent
                 continue
 
+            header_prefix = False
             if etype == "turn_context":
-                if not session.model and payload.get("model"):
+                if not session.inherited_session_ids and not session.model and payload.get("model"):
                     session.model = str(payload["model"])
                 continue
 
@@ -240,8 +321,11 @@ def parse_file(path: Path) -> Session:
     meta_fallback = ""
     if first_user_meta.strip():
         meta_fallback = first_user_meta.strip().splitlines()[0][:80]
+    # The first prompt/model in an inherited snapshot can describe an ancestor.
+    # Without an explicit boundary, use only this child's own title metadata/index.
+    prompt_title = "" if session.inherited_session_ids else _first_user_text(session)
     session.title = (lookup_title(session.session_id) or meta_fallback
-                     or _first_user_text(session) or session.session_id)
+                     or prompt_title or session.session_id)
     return session
 
 
@@ -315,9 +399,40 @@ def list_sessions(limit: int = 15) -> list[SessionInfo]:
 
 
 def find_session(session_id: str) -> Path | None:
+    found: list[Path] = []
     for root in _session_dirs():
         if root.is_dir():
-            matches = list(root.rglob(f"*{session_id}*.jsonl"))
-            if matches:
-                return matches[0]
-    return None
+            for path in root.rglob("rollout-*.jsonl"):
+                match = _UUID_RE.search(path.name)
+                candidate = match.group(1) if match else path.stem
+                if session_id in candidate:
+                    found.append(path)
+    if len(found) > 1:
+        raise ValueError(f"Ambiguous Codex identity {session_id!r}; use one exact rollout path")
+    return found[0] if found else None
+
+
+def list_subagents(parent_session_id: str) -> list[SessionInfo]:
+    """Direct children only; grandchildren require a separate call for their parent."""
+    infos = []
+    seen = set()
+    for root in _session_dirs():
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("rollout-*.jsonl")):
+            meta = _read_meta(path)
+            if not meta:
+                continue
+            source = meta.get("source")
+            sub = source.get("subagent") if isinstance(source, dict) else None
+            spawn = sub.get("thread_spawn") if isinstance(sub, dict) else None
+            linked = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+            if parent_session_id not in (linked, meta.get("parent_thread_id")):
+                continue
+            sid, parent, _, child = _identity(meta, path)
+            if not child or parent != parent_session_id or sid in seen:
+                raise ValueError(f"Codex identity conflict for child in {path.name}")
+            seen.add(sid)
+            infos.append(SessionInfo(source="codex", session_id=sid, path=path,
+                                     title=lookup_title(sid) or sid, mtime=path.stat().st_mtime))
+    return infos

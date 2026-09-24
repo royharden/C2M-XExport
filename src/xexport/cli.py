@@ -154,11 +154,20 @@ def _sniff_source(path: Path) -> str:
     return "claude"
 
 
-def _parse(path: Path, source: str) -> Session:
+def _parse(path: Path, source: str, requested_id: str | None = None,
+           *, partial: bool = False) -> Session:
     if source == "auto":
         source = _sniff_source(path)
     if source == "codex":
-        return codex.parse_file(path)
+        try:
+            session = codex.parse_file(path)
+            if requested_id and not (requested_id == session.session_id or
+                                     (partial and requested_id in session.session_id)):
+                raise ValueError(f"Codex identity conflict: requested {requested_id}, "
+                                 f"parsed {session.session_id}")
+            return session
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
     if source == "cursor":
         return cursor.parse_file(path)
     return claude.parse_file(path)
@@ -174,7 +183,10 @@ def _resolve_ref(ref: str, source: str) -> tuple[Path, str]:
         if p:
             found.append((p, "claude"))
     if source in ("auto", "codex"):
-        p = codex.find_session(ref)
+        try:
+            p = codex.find_session(ref)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
         if p:
             found.append((p, "codex"))
     if source in ("auto", "cursor"):
@@ -522,6 +534,7 @@ def _report(session: Session, opt: Options, results: list[tuple[Path, str, str]]
     if verbs == {"uptodate"}:
         path, _, detail = results[0]
         click.echo(f"Up to date: {detail}.")
+        click.echo(f"  source:  {session.app or session.source} · session {session.session_id}")
         click.echo(f"  file:    {path}")
         return
 
@@ -626,7 +639,7 @@ def main(ctx, limit, source, **kw):
     _print_table(infos)
     choice = click.prompt("Export which session?", type=click.IntRange(1, len(infos)))
     info = infos[choice - 1]
-    _export(_parse(info.path, info.source), _options(kw))
+    _export(_parse(info.path, info.source, info.session_id), _options(kw))
 
 
 def _gather(source: str, limit: int, *, subagents: bool = False):
@@ -684,7 +697,7 @@ def current(session_id, from_hook, source, **kw):
         hook_path = str(payload.get("transcript_path") or "").strip()
         if hook_path and Path(hook_path).is_file():
             path = Path(hook_path)
-            session = _parse(path, _sniff_source(path))
+            session = _parse(path, _sniff_source(path), session_id)
             _reconcile_last_assistant(session, payload)
             _export(session, opt)
             return
@@ -696,14 +709,16 @@ def current(session_id, from_hook, source, **kw):
             "CURSOR_CONVERSATION_ID", "").strip()):
         # Cursor agent shells expose the active conversation id.
         path, found_source = _resolve_ref(conv_id, "cursor")
+        session_id = conv_id
     elif source in ("auto", "codex") and (thread_id := os.environ.get(
             "CODEX_THREAD_ID", "").strip()):
         # Codex Desktop exposes the active task id. Prefer it over the shared
         # workspace heuristic so concurrent tasks cannot export each other.
         path, found_source = _resolve_ref(thread_id, "codex")
+        session_id = thread_id
     else:
         path, found_source = _detect_current(cwd, source)
-    _export(_parse(path, found_source), opt)
+    _export(_parse(path, found_source, session_id), opt)
 
 
 def _detect_current(cwd: Path, source: str) -> tuple[Path, str]:
@@ -776,23 +791,37 @@ def subagents_cmd(session_id, from_hook, source, **kw):
             session_id = Path(hook_path).stem
 
     if not session_id:
-        session_id = (os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-                      or os.environ.get("CURSOR_CONVERSATION_ID", "").strip())
+        env_keys = {"codex": ("CODEX_THREAD_ID",), "cursor": ("CURSOR_CONVERSATION_ID",),
+                    "claude": ("CLAUDE_CODE_SESSION_ID",)}
+        keys = env_keys.get(source, ("CODEX_THREAD_ID", "CURSOR_CONVERSATION_ID",
+                                     "CLAUDE_CODE_SESSION_ID"))
+        session_id = next((os.environ[k].strip() for k in keys
+                           if os.environ.get(k, "").strip()), "")
     if not session_id:
         path, found_source = _detect_current(Path.cwd(), source)
-        session_id = path.stem
+        session_id = _parse(path, found_source).session_id
 
     infos = []
     if source in ("auto", "claude"):
         infos.extend(claude.list_subagents(session_id))
     if source in ("auto", "cursor"):
         infos.extend(cursor.list_subagents(session_id))
+    if source in ("auto", "codex"):
+        try:
+            infos.extend(codex.list_subagents(session_id))
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
     if not infos:
         _say(opt, f"No subagent transcripts found for session {session_id}.")
         return
 
-    for info in infos:
-        _export(_parse(info.path, info.source), opt)
+    # Validate the whole batch before any output is created or refreshed.
+    sessions = [_parse(info.path, info.source, info.session_id) for info in infos]
+    for session in sessions:
+        if session.source == "codex" and session.parent_session_id != session_id:
+            raise click.ClickException("Codex identity conflict: child parent changed during discovery")
+    for session in sessions:
+        _export(session, opt)
 
 
 @main.command()
@@ -802,7 +831,8 @@ def export(ref, source, **kw):
     """Export a session by id or by path to a .jsonl file."""
     _utf8_stdout()
     path, found_source = _resolve_ref(ref, source)
-    _export(_parse(path, found_source), _options(kw))
+    requested_id = None if Path(ref).is_file() else ref
+    _export(_parse(path, found_source, requested_id, partial=True), _options(kw))
 
 
 if __name__ == "__main__":

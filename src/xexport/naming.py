@@ -173,6 +173,10 @@ def resolve_callsign(explicit: str | None, *, session: Session | None = None) ->
     assignment.
     """
     if session is not None and session.is_subagent:
+        if session.inherited_session_ids:
+            # The first assignment may be copied from an ancestor. Do not stamp
+            # the child with that name or an inherited process-level override.
+            return ""
         # A subagent's callsign can only come from its own transcript. Neither a
         # flag nor the environment can supply one: both describe the PARENT -- the
         # env var because that is the process the parent is running in (and

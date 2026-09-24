@@ -50,6 +50,8 @@ class Session:
     is_subagent: bool = False
     parent_session_id: str = ""   # the session that spawned this subagent
     messages: list[Message] = field(default_factory=list)
+    agent_path: str = ""          # native Codex hierarchy path, when recorded
+    inherited_session_ids: list[str] = field(default_factory=list)
 
     @property
     def assistant_label(self) -> str:

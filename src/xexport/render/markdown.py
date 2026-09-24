@@ -45,6 +45,12 @@ def _header_lines(session: Session) -> list[str]:
     meta.append(f"- **Session:** `{session.session_id}`")
     if session.is_subagent and session.parent_session_id:
         meta.append(f"- **Subagent of:** `{session.parent_session_id}`")
+    if session.agent_path:
+        meta.append(f"- **Agent path:** `{session.agent_path}`")
+    if session.inherited_session_ids:
+        ancestors = ", ".join(f"`{sid}`" for sid in session.inherited_session_ids)
+        meta.append(f"- **Inherited context:** includes copied history from {ancestors}; "
+                    "this is a full rollout snapshot, not solely this child's work.")
     if session.cwd:
         meta.append(f"- **Workspace:** `{session.cwd}`")
     if session.started:

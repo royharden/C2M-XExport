@@ -84,7 +84,8 @@ details.raw-entry summary { cursor: pointer; color: var(--text-muted); }
 <body>
     <div class="container">
 {% block content %}{% endblock %}
-        <footer class="footer">Exported by <a href="https://github.com/royharden/C2M-XExport">xexport</a> v{{ version }} from {{ session.app }} · session <code>{{ session.session_id }}</code> · {{ exported }} · style adapted from <a href="https://github.com/simonw/claude-code-transcripts">claude-code-transcripts</a></footer>
+        {% if session.inherited_session_ids %}<p class="footer">Inherited context: includes copied history from {% for sid in session.inherited_session_ids %}<code>{{ sid }}</code>{% if not loop.last %}, {% endif %}{% endfor %}; this is a full rollout snapshot, not solely this child's work.</p>{% endif %}
+        <footer class="footer">Exported by <a href="https://github.com/royharden/C2M-XExport">xexport</a> v{{ version }} from {{ session.app }} · session <code>{{ session.session_id }}</code>{% if session.parent_session_id %} · subagent of <code>{{ session.parent_session_id }}</code>{% endif %}{% if session.agent_path %} · agent path <code>{{ session.agent_path }}</code>{% endif %} · {{ exported }} · style adapted from <a href="https://github.com/simonw/claude-code-transcripts">claude-code-transcripts</a></footer>
     </div>
     <script>
 document.querySelectorAll('time[data-timestamp]').forEach(function(el) {

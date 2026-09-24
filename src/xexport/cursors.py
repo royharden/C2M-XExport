@@ -65,6 +65,10 @@ def content_digest(session: Session) -> str:
     """
     h = hashlib.sha1()
     h.update(f"{session.title}|{session.model}|{session.app}".encode("utf-8", "replace"))
+    if session.is_subagent:
+        h.update(f"|{session.parent_session_id}|{session.agent_path}".encode("utf-8", "replace"))
+    if session.inherited_session_ids:
+        h.update(json.dumps(session.inherited_session_ids).encode("utf-8", "replace"))
     for message in session.messages:
         h.update(_SEP_MESSAGE)
         h.update(f"{message.role}|{message.timestamp}".encode("utf-8", "replace"))
