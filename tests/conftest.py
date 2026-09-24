@@ -10,6 +10,7 @@ import pytest
 CLAUDE_SESSION_ID = "11111111-2222-3333-4444-555555555555"
 CODEX_SESSION_ID = "019f0000-aaaa-bbbb-cccc-dddddddddddd"
 CURSOR_SESSION_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+GROK_SESSION_ID = "01a00000-0000-7000-8000-000000000001"
 
 
 def _jsonl(path: Path, entries: list[dict]) -> Path:
@@ -172,4 +173,36 @@ def cursor_store(tmp_path, monkeypatch):
                {"type": "text", "text": "<user_query>\nsubagent only\n</user_query>"},
            ]}}])
     monkeypatch.setenv("XEXPORT_CURSOR_HOME", str(home))
+    return home
+
+
+def grok_entries() -> list[dict]:
+    return [
+        {"type": "system", "content": "You are Grok 4.6 released by xAI."},
+        {"type": "user", "content": [{"type": "text", "text": "Please export this Grok chat."}]},
+        {"type": "reasoning", "id": "rs_1", "summary": [
+            {"type": "summary_text", "text": "User wants an export."}
+        ]},
+        {"type": "assistant", "content": "I'll look at the file.",
+         "tool_calls": [{"id": "call-1", "name": "read_file",
+                         "arguments": "{\"target_file\":\"C:\\\\proj\\\\a.py\"}"}],
+         "model_id": "grok-4.6"},
+        {"type": "tool_result", "tool_call_id": "call-1", "content": "print('ok')"},
+        {"type": "assistant", "content": "Done.", "model_id": "grok-4.6"},
+    ]
+
+
+@pytest.fixture
+def grok_store(tmp_path, monkeypatch):
+    home = tmp_path / "grok-home"
+    from urllib.parse import quote
+    encoded = quote("C:\\proj", safe="")
+    folder = home / "sessions" / encoded / GROK_SESSION_ID
+    _jsonl(folder / "chat_history.jsonl", grok_entries())
+    (folder / "summary.json").write_text(
+        json.dumps({"generated_title": "Grok export fixture",
+                    "info": {"id": GROK_SESSION_ID, "cwd": "C:\\proj"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XEXPORT_GROK_HOME", str(home))
     return home

@@ -5,9 +5,9 @@ from __future__ import annotations
 from xexport.model import (
     ASSISTANT_TEXT, RAW, THINKING, TOOL_CALL, TOOL_RESULT, USER_TEXT,
 )
-from xexport.sources import claude, codex, cursor
+from xexport.sources import claude, codex, cursor, grok
 
-from conftest import CLAUDE_SESSION_ID, CODEX_SESSION_ID, CURSOR_SESSION_ID
+from conftest import CLAUDE_SESSION_ID, CODEX_SESSION_ID, CURSOR_SESSION_ID, GROK_SESSION_ID
 
 
 def _kinds(session):
@@ -158,3 +158,57 @@ class TestCursorParser:
     def test_prompt_groups(self, cursor_store):
         s = cursor.parse_file(cursor.find_session(CURSOR_SESSION_ID))
         assert len(s.prompt_groups()) == 2
+
+
+class TestGrokParser:
+    def test_parses_store_session(self, grok_store):
+        # what_bug_this_catches: Grok CLI sessions lived in ~/.grok/sessions
+        # with no xexport source, so PracticeHub Grok AgentOps never produced
+        # .chatexports files named with Grok callsigns.
+        path = grok.find_session(GROK_SESSION_ID)
+        assert path is not None
+        s = grok.parse_file(path)
+        assert s.source == "grok"
+        assert s.session_id == GROK_SESSION_ID
+        assert s.app == "Grok CLI"
+        assert s.cwd == "C:\\proj"
+        assert s.model == "grok-4.6"
+        assert s.title == "Grok export fixture"
+        kinds = _kinds(s)
+        assert ("user", USER_TEXT) in kinds
+        assert ("assistant", THINKING) in kinds
+        assert ("assistant", TOOL_CALL) in kinds
+        assert ("tool", TOOL_RESULT) in kinds
+        assert ("assistant", ASSISTANT_TEXT) in kinds
+
+    def test_skips_system_preamble(self, grok_store):
+        s = grok.parse_file(grok.find_session(GROK_SESSION_ID))
+        texts = [b.text for m in s.messages for b in m.blocks]
+        assert not any(t.startswith("You are Grok 4.6") for t in texts)
+
+    def test_listing(self, grok_store):
+        infos = grok.list_sessions()
+        assert len(infos) == 1
+        assert infos[0].session_id == GROK_SESSION_ID
+        assert infos[0].title == "Grok export fixture"
+
+    def test_null_user_text_item_does_not_crash(self, grok_store):
+        # what_bug_this_catches: a user content item {"type": "text", "text": null}
+        # raised AttributeError in the user branch (the assistant branch already
+        # guarded it), turning an odd entry into a failed export instead of a
+        # degraded one.
+        import json
+        path = grok.find_session(GROK_SESSION_ID)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "content": [{"type": "text", "text": None}]}) + "\n")
+        assert grok.parse_file(path).session_id == GROK_SESSION_ID
+
+    def test_title_falls_back_to_first_prompt_without_summary_title(self, grok_store):
+        # what_bug_this_catches: _summary_title returned info.id when summary.json had
+        # no generated_title/session_summary (a fresh session), so the first-prompt
+        # fallback never ran and the export was titled with the session UUID.
+        import json
+        path = grok.find_session(GROK_SESSION_ID)
+        (path.parent / "summary.json").write_text(
+            json.dumps({"info": {"id": GROK_SESSION_ID, "cwd": "C:\\proj"}}), encoding="utf-8")
+        assert grok.parse_file(path).title == "Please export this Grok chat."

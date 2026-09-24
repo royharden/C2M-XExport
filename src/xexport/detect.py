@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from .sources import claude, codex, cursor
+from .sources import claude, codex, cursor, grok
 
 
 def _norm(p: str | Path) -> str:
@@ -101,4 +101,37 @@ def detect_cursor(cwd: str | Path) -> tuple[Path | None, bool]:
     if not candidates:
         return None, False
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0], False
+
+
+def detect_grok(cwd: str | Path) -> tuple[Path | None, bool]:
+    """Newest Grok chat_history.jsonl for this cwd's encoded session folder.
+
+    ``GROK_SESSION_ID`` is preferred by ``current`` when present. Returns
+    (path, confirmed) where confirmed is True only when that env id resolves.
+    """
+    grok_id = os.environ.get("GROK_SESSION_ID", "").strip()
+    if grok_id:
+        path = grok.find_session(grok_id)
+        if path:
+            return path, True
+    encoded = grok.encode_project_dir(cwd)
+    folder = grok.sessions_dir() / encoded
+    if not folder.is_dir():
+        # Case-insensitive match for Windows path encoding drift.
+        root = grok.sessions_dir()
+        if root.is_dir():
+            for child in root.iterdir():
+                if child.is_dir() and child.name.lower() == encoded.lower():
+                    folder = child
+                    break
+    if not folder.is_dir():
+        return None, False
+    candidates = sorted(
+        (p for p in folder.glob("*/chat_history.jsonl")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return None, False
     return candidates[0], False

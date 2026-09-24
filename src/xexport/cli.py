@@ -18,10 +18,10 @@ from . import __version__, cursors, detect, naming, publish
 from .model import ASSISTANT_TEXT, Block, Message, Session
 from .render.html import render_html
 from .render.markdown import render_markdown
-from .sources import claude, codex, cursor
+from .sources import claude, codex, cursor, grok
 from .titles import unique_path
 
-_SOURCE_CHOICES = ["auto", "claude", "codex", "cursor"]
+_SOURCE_CHOICES = ["auto", "claude", "codex", "cursor", "grok"]
 _MODE_CHOICES = ["new", "append", "replace"]
 
 # Verdicts that mean "leave the existing export alone and write beside it".
@@ -138,6 +138,8 @@ def _sniff_source(path: Path) -> str:
     parts = {p.lower() for p in path.parts}
     if "agent-transcripts" in parts:
         return "cursor"
+    if path.name == "chat_history.jsonl" or ".grok" in parts:
+        return "grok"
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             first = f.readline()
@@ -170,6 +172,8 @@ def _parse(path: Path, source: str, requested_id: str | None = None,
             raise click.ClickException(str(exc)) from exc
     if source == "cursor":
         return cursor.parse_file(path)
+    if source == "grok":
+        return grok.parse_file(path)
     return claude.parse_file(path)
 
 
@@ -193,6 +197,10 @@ def _resolve_ref(ref: str, source: str) -> tuple[Path, str]:
         p = cursor.find_session(ref)
         if p:
             found.append((p, "cursor"))
+    if source in ("auto", "grok"):
+        p = grok.find_session(ref)
+        if p:
+            found.append((p, "grok"))
     if not found:
         raise click.ClickException(
             f"No session matching {ref!r} found"
@@ -650,6 +658,8 @@ def _gather(source: str, limit: int, *, subagents: bool = False):
         infos.extend(codex.list_sessions(limit))
     if source in ("auto", "cursor"):
         infos.extend(cursor.list_sessions(limit, subagents=subagents))
+    if source in ("auto", "grok"):
+        infos.extend(grok.list_sessions(limit, subagents=subagents))
     infos.sort(key=lambda i: i.mtime, reverse=True)
     return infos[:limit]
 
@@ -716,6 +726,10 @@ def current(session_id, from_hook, source, **kw):
         # workspace heuristic so concurrent tasks cannot export each other.
         path, found_source = _resolve_ref(thread_id, "codex")
         session_id = thread_id
+    elif source in ("auto", "grok") and (grok_id := os.environ.get(
+            "GROK_SESSION_ID", "").strip()):
+        path, found_source = _resolve_ref(grok_id, "grok")
+        session_id = grok_id
     else:
         path, found_source = _detect_current(cwd, source)
     _export(_parse(path, found_source, session_id), opt)
@@ -735,6 +749,10 @@ def _detect_current(cwd: Path, source: str) -> tuple[Path, str]:
         p, matched = detect.detect_cursor(cwd)
         if p:
             candidates.append((p, "cursor", matched))
+    if source in ("auto", "grok"):
+        p, matched = detect.detect_grok(cwd)
+        if p:
+            candidates.append((p, "grok", matched))
     if not candidates:
         raise click.ClickException(
             "Could not find a session for this directory. "
@@ -792,9 +810,9 @@ def subagents_cmd(session_id, from_hook, source, **kw):
 
     if not session_id:
         env_keys = {"codex": ("CODEX_THREAD_ID",), "cursor": ("CURSOR_CONVERSATION_ID",),
-                    "claude": ("CLAUDE_CODE_SESSION_ID",)}
+                    "claude": ("CLAUDE_CODE_SESSION_ID",), "grok": ("GROK_SESSION_ID",)}
         keys = env_keys.get(source, ("CODEX_THREAD_ID", "CURSOR_CONVERSATION_ID",
-                                     "CLAUDE_CODE_SESSION_ID"))
+                                     "CLAUDE_CODE_SESSION_ID", "GROK_SESSION_ID"))
         session_id = next((os.environ[k].strip() for k in keys
                            if os.environ.get(k, "").strip()), "")
     if not session_id:
@@ -811,6 +829,8 @@ def subagents_cmd(session_id, from_hook, source, **kw):
             infos.extend(codex.list_subagents(session_id))
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
+    if source in ("auto", "grok"):
+        infos.extend(grok.list_subagents(session_id))
     if not infos:
         _say(opt, f"No subagent transcripts found for session {session_id}.")
         return

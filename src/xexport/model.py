@@ -59,6 +59,7 @@ class Session:
             "claude": "Claude",
             "codex": "Codex",
             "cursor": "Cursor",
+            "grok": "Grok",
         }.get(self.source, self.source.title() or "Assistant")
 
     def is_prompt(self, m: Message) -> bool:
