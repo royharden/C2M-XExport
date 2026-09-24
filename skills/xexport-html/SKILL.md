@@ -25,11 +25,12 @@ level makes the Markdown files hard to find.
    | "redo it" / "rebuild it" / "overwrite the existing one" | `--mode replace` |
    | "as a new export called X" | `--mode new --name "X"` |
 
-   **For HTML, `--mode append` means "re-render this session's existing folder in
-   place".** The output is a paginated, index-linked site derived wholly from the
-   session, so regenerating it produces exactly what an incremental append would have —
-   without leaving a half-written index behind. If no export exists yet it creates one.
-   With no new turns it prints "Up to date" and touches nothing.
+   **`--mode append` refreshes the existing export by re-parsing and
+   re-rendering the whole transcript**, or creates it if absent. It is not literal
+   line appending. An unchanged transcript prints "Up to date" and touches nothing.
+   Shrink and content-filter guards protect the existing folder; a refusal may
+   write a separate folder with a warning and provenance. Preserve both. Explicit
+   `--mode replace` can override content guards, never identity validation.
 
    **Substitute the mode you picked for `<MODE>` in the command below.** The
    commands are templates, not literals — copying one unchanged is the most likely
@@ -86,9 +87,16 @@ level makes the Markdown files hard to find.
    uv run --project "C:\Users\Roy Harden\OneDrive\PJ-OD\C2M\C2M-XExport" xexport current ...
    ```
 
-6. Verify that the reported session id equals the requested id, then relay the "wrote:"
-   path (or "Up to date") to the user in one line. The export is a snapshot up to the
-   moment the command runs; the turn invoking this skill is only partially captured.
+6. Verify that the reported session id equals the requested id, including an
+   "Up to date" result. Exit 0 or `wrote/updated` alone is insufficient. If the ID
+   differs or is missing, preserve existing exports, stop this write path, inspect
+   only the intended rollout's identity metadata, and report the failure. Never use
+   `--mode replace` to repair an identity mismatch. Callsigns label exports; they
+   do not select a conversation.
+
+   Report whether the export was created, refreshed, or already current, and link
+   its path. Relay every `Warning:` verbatim and identify any separate guard-created
+   file; retain its provenance and the protected original.
 
 ## Notes
 
@@ -102,9 +110,43 @@ level makes the Markdown files hard to find.
 - `--html-subdir ""` writes HTML flat into `.chatexports\` (the pre-0.2.0 layout) if the
   user explicitly asks for that.
 - Markdown instead: use the sibling skill `xexport-md`.
-- To export a session's **subagent** transcripts: `xexport subagents --session-id
-  <parent id> --format html --mode append --out "<output-dir>"`. They land in
-  `.chatexports\html\` beside the main exports, marked by their `claude-agent-<hex>` id
-  suffix; `--subagent-subdir subagents` puts them in their own folder instead.
+- **Native Codex children require xexport 0.2.2 or later.** Verify the executable
+  version before using either child export path. In 0.2.0 even an exact child ID
+  can be parsed as its parent; do not retry against production exports or use
+  `--mode replace`. Report the limitation until a tested fixed CLI is available.
+- Parent-driven Codex export:
+  `xexport subagents --source codex --session-id "<exact parent CODEX_THREAD_ID>" --format html --mode append --out "<output-dir>"`.
+  This finds **direct children only**, through explicit `thread_spawn.parent_thread_id`.
+  For grandchildren, invoke it again with each child's exact ID as parent.
+- A native Codex child can export itself using the `current` command above when
+  its runtime `CODEX_THREAD_ID` matches metadata `payload.id` and the rollout filename.
+  `CODEX_SESSION_ID` / metadata `session_id` may identify the parent. Never substitute
+  them for the child's identity. If runtime identity is inherited or unavailable,
+  the parent must select the child's verified exact thread ID. A callsign assignment
+  in a fresh-context child's opening task labels its export; bulk child exports ignore inherited
+  callsign flags/environment values.
+- Claude/Cursor children use the harness-specific parent-driven command:
+  `xexport subagents --source <claude|cursor> --session-id "<parent id>" --format html --mode append --out "<output-dir>"`.
+  Do not assume their child environment exposes an independent identity. Child
+  exports land beside the main exports in the chosen format; `--subagent-subdir
+  subagents` optionally separates them. Claude IDs use `claude-agent-<hex>`;
+  native Codex children retain `codex-<full child thread id>`.
 - To make exports happen automatically for every session and every subagent in a
   project, use the sibling skill `xexport-auto`.
+
+
+## Native Codex inherited history (0.2.2)
+
+Version 0.2.1 supports fresh-context children but rejects valid full-history children
+whose second metadata record belongs to the parent. Use 0.2.2 or later for these
+exports. The first validated child envelope determines identity, title lookup and
+destination. Only the contiguous, explicitly linked ancestor-header chain before
+conversation content is accepted as inherited metadata; unrelated, conflicting or
+late ancestor headers still fail before writes.
+
+The export preserves copied history and labels it as **Inherited context** with
+ancestor IDs. It is a full rollout snapshot, not solely the child's own work. Its
+opening prompt/callsign and model can belong to an ancestor, so xexport uses a neutral
+`Codex_Sub` label and the child's own indexed/envelope title (or child ID) when no
+reliable child-only boundary is available. Do not substitute the parent's callsign,
+rewrite rollout metadata, or treat a missing child callsign as an identity failure.

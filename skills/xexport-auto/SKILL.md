@@ -16,24 +16,30 @@ Two mechanisms, because only one harness has hooks:
 | **Claude Code** | hooks in `.claude\settings.json` | No — the harness runs them |
 | Codex / Cursor | a marked boot section in the project's `AGENTS.md` | Only if the agent ignores its instructions |
 
-**Grok is not supported.** The `xexport` CLI reads the Claude Code, Codex and Cursor
-session stores only; there is no Grok store to export. Grok CLI reads `AGENTS.md`, so it
-will *see* the boot section — say plainly that it does not apply to it rather than
-letting an agent try and fail.
+**Grok CLI (xexport 0.2.3+)** reads `~/.grok/sessions/<encoded-cwd>/<GROK_SESSION_ID>/chat_history.jsonl`.
+Use `--source grok` and `GROK_SESSION_ID`. Grok has Stop/SubagentStop hooks (`.grok/hooks/`);
+install the same recipe as Claude, with `--source grok` and an absolute `--out`. Grok children
+have their own session ids; `subagents --source grok` finds them via AgentNamer `parent_id`.
 
-## Read this before installing: "export at the start" does not do what it sounds like
+## Freshness during active work
 
-At session start the transcript is empty — there is nothing to export, and a start-time
-export writes a file whose only content is a header. The actual goal ("never lose a
-chat") is delivered by exporting **at the end of every turn** with `--mode append`:
+For an installed autosave policy, refresh at session start (an empty session may
+produce only a header), after each completed work batch or child handoff, and before
+final reporting. During active work, check age at the next available execution step:
+use a configurable maximum age, default **10 minutes**. Refresh stale exports on user
+status requests. No timer can guarantee capture of work not yet written by the harness.
 
-- the file exists from the first turn onward,
-- it is current after every turn, so a crash loses nothing,
-- re-running is near-free: an unchanged turn is a no-op,
-- and with no new turns it is a no-op that does not even touch the file.
+Record the last successful verified export time separately for parent and children,
+plus pending failures, in the task's existing status/handoff notes. Carry these and
+the next freshness checkpoint across compaction. Advance success time only after
+the reported identity matches; a guard-created companion must be recorded with its
+warning and provenance. Export failure does not complete production work or disappear
+from progress tracking. On a status request, report last success and outstanding
+child failures when relevant.
 
-If the user explicitly wants a file to exist the moment a session opens, say what that
-file will contain and let them decide.
+These are agent execution checkpoints. Do not install a watcher or scheduled
+automation unless the user authorizes one. Claude's Stop/SubagentStop hooks provide
+additional turn/completion checkpoints, but do not keep a single long active turn fresh.
 
 ## Claude Code: the hooks
 
@@ -83,9 +89,9 @@ Every part of that command line is load-bearing:
   reads an existing registry directly — it never runs `claim.py`, and never creates or
   mutates a registry. For a main session it matches the session id against the registry's
   `ids/*.json`, ignoring `sub` records; for a subagent it reads only the
-  "Your callsign is …" line its parent wrote, because a subagent shares its parent's
-  session id and a registry lookup would answer with the parent's name. A project with no
-  registry produces no prefix, which is the correct result.
+  "Your callsign is …" line its parent wrote. Claude child session fields can
+  identify the parent; native Codex uses the distinct child `id`. In either case,
+  inherited process labels must not replace the child's assigned callsign. Without a callsign, the label falls back to the harness and available model.
 - **`--from-hook`** reads the hook JSON on stdin. `current` uses `transcript_path` when
   present, else `session_id`, else normal detection. `subagents` accepts a
   `transcript_path` **only** if it really is a subagent transcript, because a
@@ -173,7 +179,7 @@ form: `xexport current --session-id "$CLAUDE_CODE_SESSION_ID" ...`.
 
 - `SessionEnd` fires once per session — quieter, but it does not fire when the process
   dies, so a crashed session is lost. Use it only if the per-turn cost is a problem.
-- `SessionStart` is not recommended; see the section above.
+- `SessionStart` can create an initial receipt; ongoing freshness still needs the checkpoints above.
 
 ### Cost
 
@@ -187,8 +193,8 @@ xexport current --session-id <big session> --format md --mode append --out .chat
 ## Codex / Cursor: the boot section
 
 These harnesses have no hooks, so the instruction file is the mechanism — exactly as
-AgentNamer does it. (Grok CLI reads `AGENTS.md` too, but xexport cannot read Grok
-sessions, so the block says so rather than sending it on a fool's errand.) Append a marked
+AgentNamer does it. Grok CLI both reads `AGENTS.md` and has Stop hooks; keep the boot
+section so a missed hook still exports. Append a marked
 block to the project's root `AGENTS.md` (and make sure `CLAUDE.md` imports `AGENTS.md`, or
 carries the block itself):
 
@@ -196,22 +202,41 @@ carries the block itself):
 <!-- xexport-auto:begin -->
 ## Chat autosave
 
-Before your final reply in any session, export this chat:
+Export at session start, after each completed batch or child handoff, before final
+reporting, and at the next available execution step when the last verified export
+is older than 10 minutes (configurable). On a user status request, refresh if stale.
 
-    xexport current --source <claude|codex|cursor> --session-id "<your session id>" \
+    xexport current --source <claude|codex|cursor|grok> --session-id "<exact own session id>" \
         --format md --mode append --out "<project root>\.chatexports"
 
 - Session id: `CODEX_THREAD_ID` (Codex), `CURSOR_CONVERSATION_ID` (Cursor),
-  `CLAUDE_CODE_SESSION_ID` (Claude Code).
-- Add `--callsign "<your callsign>"` if you hold an AgentNamer callsign.
-- Running it mid-session is free: `--mode append` writes only what is new, and prints
-  "Up to date" when there is nothing to add.
-- If you spawned subagents, also run:
-  `xexport subagents --session-id "<your session id>" --format md --mode append --out "<project root>\.chatexports"`
-- **If you are a subagent (a parent agent named you), run neither command.** A Codex or
-  Cursor subagent inherits its parent's session id, so `xexport current` from a subagent
-  exports the *parent's* transcript under the *child's* callsign. Your parent runs
-  `xexport current` for the session and `xexport subagents` for you.
+  `CLAUDE_CODE_SESSION_ID` (Claude Code), `GROK_SESSION_ID` (Grok). Do not use recency when an ID is absent.
+- Verify the returned session ID on every result, including "Up to date"; exit 0
+  alone is insufficient. On missing/mismatched identity, preserve existing exports,
+  stop this path, inspect only the intended session metadata, and report the failure.
+  Never use `--mode replace` to repair identity.
+- Add `--callsign "<your callsign>"` for your own main session if assigned. A callsign
+  affects labeling only. Fresh-context child exports use their own opening assignment.
+  Full-history child exports preserve and label inherited context; they use neutral
+  `Codex_Sub` labeling when the child's assignment cannot be separated from copied history.
+- `--mode append` re-parses and re-renders the whole transcript with shrink/fidelity
+  guards. It is not literal line appending; unchanged content is a no-op. Preserve
+  guard warnings verbatim, protected originals, and any companion's provenance.
+- For children, require xexport **0.2.2+** on Codex. Parent-driven export is:
+  `xexport subagents --source <claude|codex|cursor> --session-id "<exact parent id>" --format md --mode append --out "<project root>\.chatexports"`.
+  Codex discovery includes direct children only; run again for each child with
+  children of its own. Verify each returned ID against the explicitly linked child.
+- Native Codex children may self-export when runtime `CODEX_THREAD_ID` matches
+  metadata `payload.id` and the rollout filename. Metadata `session_id` and runtime
+  `CODEX_SESSION_ID` can identify the parent. If the runtime ID is inherited/missing,
+  have the parent use the verified exact child thread ID. Before 0.2.2, even an exact
+  child ID is unsafe: report the unsupported path instead of attempting the write.
+- Claude/Cursor children without a verified independent identity rely on their
+  parent/hook; do not run `current` with an inherited parent ID and a child's callsign.
+- Preserve parent/child last-success times, pending failures, and next freshness
+  checkpoint in existing task status/handoff notes across compaction. Update success
+  only after verification; report stale/failed children on status requests. This is
+  execution policy, not authorization to install a watcher or scheduled automation.
 - A receipt path you quote to another agent is a location, not permission to read it:
   transcripts hold the user's prompts and tool output.
 <!-- xexport-auto:end -->
@@ -220,11 +245,10 @@ Before your final reply in any session, export this chat:
 Keep the `xexport-auto:begin/end` markers: they are what makes re-running this skill
 idempotent instead of appending a second copy.
 
-**Why the subagent line is there (found 2026-09-08 during the A-Mail cross-harness
-trial):** a Codex subagent that followed the block literally exported its parent's whole
-thread under its own callsign, because `CODEX_THREAD_ID` is inherited. Claude Code is
-not affected: its `SubagentStop` hook reads `agent_transcript_path`. Projects that
-already carry the block (for example the A-Mail constitution) should add the same line.
+**Migration:** replace an existing marked block instead of appending a second one.
+Older blocks prohibit all Codex child self-export based on an inherited-ID assumption;
+that does not describe native Codex children with independently verified thread IDs.
+Update only projects in the user's requested scope; do not sweep unrelated constitutions.
 
 ## Adding it to a priming / constitution skill
 
@@ -245,22 +269,22 @@ optional flag.
   callsign the same field falls back to `<Harness>_<Model>`, so every export still names
   its agent and adopting AgentNamer later only adds the id.
 - In a hook there is no agent to ask, and none is needed: `auto` is the default and
-  reads the registry directly. A project without a registry produces no prefix at all,
-  which is the correct result.
+  reads the registry directly. Without a callsign, labels fall back to the harness and available model.
 - `XEXPORT_CALLSIGN` overrides the lookup for a **main** session. It is deliberately
   ignored for subagent receipts: it describes the process the parent is running in, and
   labelling a child's receipt with the parent's name misattributes what an agent said.
 
 ## Checklist
 
-1. **Confirm `xexport --version` reports 0.2.0 or later** before anything else.
+1. **Confirm `xexport --version` reports 0.2.2 or later for native Codex children**
+   (0.2.0 suffices for the older Claude/Cursor hooks).
    `--mode`, `--from-hook`, `--callsign` and `subagents` do not exist in 0.1.1, and a
    hook built on them against an older CLI is the exit-2 turn loop described above.
    While you are there, dry-run the exact recipe you are about to install and check it
-   exits 0:
+   exits 0 and reports the intended session ID (omit `--quiet` for this verification):
 
    ```
-   echo '{"session_id":"<a real session id>"}' | xexport current --from-hook --format md --quiet --out .chatexports
+   echo '{"session_id":"<a real session id>"}' | xexport current --from-hook --format md --out .chatexports
    ```
 
 2. **Resolve the executable the *hook* process can run, not the one your shell can.**
@@ -280,6 +304,23 @@ optional flag.
    in `.chatexports\` after the next turn.
 6. Other harnesses: append the marked boot section to `AGENTS.md`.
 7. Run one subagent and confirm its transcript lands in `.chatexports\` beside the main
-   exports, named `... -- claude-agent-<hex>.md` — and that the parent transcript did
+   exports, named with its own full source/session identity — and that the parent transcript did
    **not** get a second copy written under that name.
 8. Follow `sync-skills-across-agents` if the project keeps skill mirrors.
+
+
+## Native Codex inherited history (0.2.2)
+
+Version 0.2.1 supports fresh-context children but rejects valid full-history children
+whose second metadata record belongs to the parent. Use 0.2.2 or later for these
+exports. The first validated child envelope determines identity, title lookup and
+destination. Only the contiguous, explicitly linked ancestor-header chain before
+conversation content is accepted as inherited metadata; unrelated, conflicting or
+late ancestor headers still fail before writes.
+
+The export preserves copied history and labels it as **Inherited context** with
+ancestor IDs. It is a full rollout snapshot, not solely the child's own work. Its
+opening prompt/callsign and model can belong to an ancestor, so xexport uses a neutral
+`Codex_Sub` label and the child's own indexed/envelope title (or child ID) when no
+reliable child-only boundary is available. Do not substitute the parent's callsign,
+rewrite rollout metadata, or treat a missing child callsign as an identity failure.
