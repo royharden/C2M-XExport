@@ -1,6 +1,6 @@
 # AGENTS.md — C2M-XExport
 
-Python CLI (`xexport`) + agent skills that export Claude Code, Codex, and Cursor Agent
+Python CLI (`xexport`) + agent skills that export Claude Code, Codex, Cursor Agent, and Grok CLI
 chat sessions to paginated HTML or Markdown. Sibling of the C2M Chat-to-Markdown
 Chrome extension (same mission, different surface: local session stores instead of
 browser DOM).
@@ -11,7 +11,8 @@ browser DOM).
   Agent-only plans, reviews, scratch memory, and generated indexes go in gitignored
   `.agent-work/`. No second truths.
 - Recon before edit: the parsed formats (Claude `~\.claude\projects\*.jsonl`, Codex
-  rollout jsonl, Cursor `~\.cursor\projects\*\agent-transcripts\*\*.jsonl`) are
+  rollout jsonl, Cursor `~\.cursor\projects\*\agent-transcripts\*\*.jsonl`, Grok
+  `~\.grok\sessions\*\*\chat_history.jsonl`) are
   **internal and version-drifting**. Before changing a parser, re-verify the live
   format on this machine; fixtures in `tests/fixtures/` pin the currently observed
   shape so drift shows up as a failing test.
@@ -39,7 +40,7 @@ browser DOM).
 ## Layout
 
 - `src/xexport/model.py` — neutral IR (Session/Message/Block). Parse once, render twice.
-- `src/xexport/sources/` — `claude.py`, `codex.py`, `cursor.py`: store discovery, title
+- `src/xexport/sources/` — `claude.py`, `codex.py`, `cursor.py`, `grok.py`: store discovery, title
   resolution, jsonl → IR.
 - `src/xexport/render/` — `markdown.py`; `html.py` + `templates/` (adapted from
   claude-code-transcripts, Apache-2.0 — keep the NOTICE attribution).
@@ -49,7 +50,7 @@ browser DOM).
   callsign registry. `cursors.py` — the record each export keeps of what it was made
   from. `publish.py` — atomic writes and the per-session lock.
 - `src/xexport/cli.py` — click CLI; console script `xexport`.
-- Skills: canonical copies live in `PJ-OD\skills\xexport-html|md|auto\` (NOT in this repo);
+- Skills: canonical copies live in `PJ-OD\skills\skills-bts\xexport-html|md|auto\` (NOT in this repo);
   `skills/` here holds the templates they are generated from. Follow the
   `sync-skills-across-agents` skill for any skill change.
 
@@ -61,3 +62,23 @@ uv run pytest           # tests must be green before commit
 uv run xexport --help
 uv tool install --force -e .   # refresh the global command after changes
 ```
+
+
+## Native Codex identity (0.2.1, 2026-09-09)
+
+- Native children use `session_meta.payload.id`; inherited `session_id` is not
+  their identity. Keep `thread_spawn.parent_thread_id` and `agent_path` separately.
+- Validate requested identity, filename, and metadata before export lookup/write.
+  `replace` never bypasses identity validation. Discovery includes direct children
+  only, including archived rollouts; test grandchildren exclusion explicitly.
+- Skill source remains `PJ-OD/skills/skills-bts/xexport-{md,html,auto}/SKILL.md`; `skills/` is
+  the synchronized template copy. Use `sync-skills-across-agents` after changes.
+
+
+## Inherited Codex metadata (0.2.2, 2026-09-09)
+
+A native child can contain copied ancestor headers immediately after its own envelope.
+Keep the first validated identity; admit only the contiguous explicitly linked ancestor
+chain before content. Preserve copied history with provenance. Never infer a child's
+callsign/title/model from ancestor opening records. Regressions:
+`tests/test_codex_inherited_history.py`. Skill updates retain the canonical paths above.

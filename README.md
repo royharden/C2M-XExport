@@ -1,7 +1,7 @@
 # C2M-XExport
 
-Export **Claude Code**, **Codex** (Codex CLI / ChatGPT desktop), and **Cursor**
-Agent chat sessions to **paginated HTML** or **Markdown** transcripts — from
+Export **Claude Code**, **Codex** (Codex CLI / ChatGPT desktop), **Cursor**
+Agent, and **Grok CLI** chat sessions to **paginated HTML** or **Markdown** transcripts — from
 inside the chat via the `xexport-html` / `xexport-md` skills, or from any
 terminal via the `xexport` CLI.
 
@@ -36,15 +36,15 @@ uv tool install --force -e .
 ## CLI usage
 
 ```text
-xexport                       # interactive picker across Claude + Codex + Cursor
-xexport current               # export the active session (CURSOR_CONVERSATION_ID / CODEX_THREAD_ID)
+xexport                       # interactive picker across Claude + Codex + Cursor + Grok
+xexport current               # export the active session (CURSOR_CONVERSATION_ID / CODEX_THREAD_ID / GROK_SESSION_ID)
 xexport list                  # recent sessions: title, id, date, source
 xexport <session-id>          # export a specific session (any source)
 xexport <path\to\file.jsonl>  # export a transcript file directly
 xexport subagents             # every subagent transcript of one parent session
 
 Options:
-  --source claude|codex|cursor|auto   which store to look in     (default: auto)
+  --source claude|codex|cursor|grok|auto   which store to look in (default: auto)
   --format html|md|both        output format                    (default: html)
   --out DIR                    output directory                 (default: .\.chatexports)
   --name NAME                  override the {title} field       (default: chat title)
@@ -129,7 +129,7 @@ is idempotent, so re-running it costs nothing.
   skills with `$name`; `/skills` lists them)
 
 Skills are thin wrappers around the CLI; the canonical copies live in the PJ-OD skills
-directory and are mirrored per-agent by the `sync-skills-across-agents` workflow.
+directory (`PJ-OD\skills\skills-bts\`) and are mirrored per-agent by the `sync-skills-across-agents` workflow.
 
 ## Where sessions come from
 
@@ -140,6 +140,8 @@ directory and are mirrored per-agent by the `sync-skills-across-agents` workflow
 | Codex | `~\.codex\sessions\YYYY\MM\DD\rollout-*.jsonl` (+ `archived_sessions`) | `~\.codex\session_index.jsonl` / `state_5.sqlite` |
 | Cursor | `~\.cursor\projects\<encoded-cwd>\agent-transcripts\<uuid>\<uuid>.jsonl` | first user prompt (wrappers stripped) |
 | Cursor subagents | `...\<uuid>\subagents\*.jsonl` | first user prompt |
+| Grok CLI | `~\.grok\sessions\<url-encoded-cwd>\<session-id>\chat_history.jsonl` | `generated_title` (or `session_summary`) in the sibling `summary.json`, else the first prompt |
+| Grok subagents | sibling session folders, found through the AgentNamer registry (`parent_id`) | same as Grok CLI |
 
 Formats are internal to their apps and can change between releases. Parsers are
 defensive: unknown entry types become collapsed raw-JSON blocks instead of crashes.
@@ -156,3 +158,41 @@ HTML output styling and page structure are adapted from
 [claude-code-transcripts](https://github.com/simonw/claude-code-transcripts) by Simon
 Willison (Apache-2.0) — see [NOTICE](NOTICE). Markdown shape inspired by the
 `codex-export` skill.
+
+
+### Native Codex children (0.2.1)
+
+`xexport subagents --source codex --session-id <exact-parent-thread-id>` exports
+explicitly linked **direct children** from live and archived rollout stores. For
+grandchildren, invoke it with each intermediate child's ID. It does not infer
+relationships from workspace, recency, or an inherited environment value.
+
+Native child `session_meta.payload.id` is the export identity; `session_id` may
+identify its parent. A child can use `current --source codex --session-id <child-id>`
+when its runtime `CODEX_THREAD_ID`, metadata and rollout filename agree. Older
+main-session metadata with only `session_id` remains supported. Conflicting IDs,
+parent fields or ambiguous references fail before output lookup/write, including
+`--mode replace`. An exact ID is required by `current`; `export` still accepts a
+unique partial ID. Callsigns never select a conversation. Child labels come from
+the opening task's assignment, ignoring inherited process labels.
+
+Verify the reported session ID on every result, including `Up to date`. Version
+0.2.0 cannot safely export native children even by exact child ID. Append remains
+a full re-render with shrink/filter guards, whose warnings and companion provenance
+must be retained. Autosave skills specify active-work checkpoints with a configurable
+10-minute maximum age; they do not install persistent timers.
+
+
+### Full-history native Codex children (0.2.2)
+
+A child may start with its validated envelope followed by copied ancestor metadata.
+0.2.1 incorrectly rejected the inherited parent header. 0.2.2 keeps the first envelope
+as canonical and accepts only a contiguous, explicitly linked ancestor-header chain
+before content. Unrelated, malformed, cyclic or late ancestor metadata still fails.
+No rollout repairs or replace-mode bypasses are needed.
+
+Copied history is retained in both formats with an **Inherited context** notice and
+ancestor IDs; these are full rollout snapshots, not child-only work records. Because
+opening prompts, assignments and models may come from ancestors, inherited snapshots
+use neutral `Codex_Sub` labels and only the child's own title index/envelope (or ID).
+Fresh-context child callsign detection remains unchanged.

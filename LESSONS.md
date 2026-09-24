@@ -218,3 +218,23 @@ advertised that path as supported ("works on a file whose marker was lost").
 what the check was actually protecting against before relaxing it. "This mechanism can't
 have that failure any more" is a claim about the mechanism; the guard was usually about
 the *data*.
+
+
+## Native Codex session_id can identify the parent
+
+Observed 2026-09-09: a native child has its own `id` and an inherited parent
+`session_id`. Preferring `session_id` silently labels child content as its parent;
+a shrink guard only happens to help when the child is smaller. Identity must be
+validated before selecting any destination, even for a larger child or replace mode.
+Parser correctness, explicit-parent discovery, title/append lookup and result IDs
+are one contract. Covered by `tests/test_codex_native_children.py`.
+
+
+## A native child envelope can wrap ancestor metadata
+
+0.2.1 validated every session_meta against the filename, rejecting a valid native
+full-history child when its second record identified the copied parent. Validate the
+outer envelope against filename/request once; accept only an explicitly linked,
+contiguous ancestor prefix and never let it replace identity. Preserve and label
+inherited context, including its attribution limits. Synthetic regression:
+`tests/test_codex_inherited_history.py` (no private conversation fixtures required).
