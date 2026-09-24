@@ -129,7 +129,7 @@ def _reasoning_text(obj: dict) -> str:
 
 def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
     del include_sidechain
-    folder = path.parent if path.name == "chat_history.jsonl" else path.parent
+    folder = path.parent
     session_id = folder.name
     session = Session(
         source="grok",
@@ -159,8 +159,8 @@ def parse_file(path: Path, *, include_sidechain: bool | None = None) -> Session:
             if not isinstance(obj, dict):
                 continue
             ltype = obj.get("type")
-            if ltype == "system":
-                continue
+            if ltype == "system" and not session.messages:
+                continue  # the opening preamble; a later system entry is kept as a raw block
             if ltype == "reasoning":
                 text = _reasoning_text(obj)
                 if text:
