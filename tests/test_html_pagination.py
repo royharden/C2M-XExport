@@ -130,6 +130,23 @@ class TestEachTriggerAlone:
             render_html(s, out)
             _assert_within(out)
 
+    def test_a_multi_line_title_cannot_push_a_page_past_the_line_limit(
+            self, tmp_path, monkeypatch):
+        """what_bug_this_catches: a title with line breaks in it once went onto
+        every page as it was, adding lines the page budget never counted. Only
+        a line limit shows it; the token and byte limits have slack to spare.
+        Continuation pages are in the sweep because they carry one line more
+        than the first page of a group."""
+        s = _session(1, replies=150, reply="w")
+        s.title = "a\nb\n" * 40
+        for limit in range(52, 64):
+            _limits(monkeypatch, lines=limit)
+            out = tmp_path / str(limit)
+            render_html(s, out)
+            assert len(_pages(out)) > 3
+            assert any("Continues prompt" in _read(p) for p in _pages(out))
+            _assert_within(out)
+
     def test_default_budget_sits_under_the_reader_caps(self):
         """The defaults are the claim the whole layout makes; pin them."""
         assert html_mod.PAGE_MAX_TOKENS <= 20_000 < 25_000

@@ -129,7 +129,7 @@ matters cannot be run locally. The estimate weights each class of character and 
 run of letters or digits, and was calibrated against the counts Claude Code's Read tool
 reports on 29 kinds of content and 34 real pages;
 `scripts/validate_token_estimate.py` holds the calibration data and re-checks it. On
-the real pages it is 10% to 30% over. It is calibrated on English, code and tool
+the real pages it is 5% to 30% over. It is calibrated on English, code and tool
 output. Other languages cost the reader more per letter: Indonesian and Swahili prose
 are estimated about 15% under, which the margin still covers, and a language further
 out would not be. Machine-generated lowercase names (`css-kqzvbn`) look like prose to

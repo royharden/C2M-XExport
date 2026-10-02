@@ -264,7 +264,7 @@ words, none of them among the thirteen, and it was 39% to 57% under. Refitted on
 classes, it looked finished again, and a second reviewer found Indonesian and Swahili
 prose 27% to 29% under: the letter weights had been set by English, Spanish and German.
 The weights are now the solution of a linear program over 29 synthetic classes and 34
-real pages. The real pages come out 10% to 30% over; no class is more than 8% under
+real pages. The real pages come out 5% to 30% over; no class is more than 8% under
 except three held to 15% (Indonesian, Swahili, lowercase ids), which the gap between
 the budget and the cap still covers; and one kind of content is recorded as a known
 failure rather than fixed. Random lowercase letters, which in practice means generated
