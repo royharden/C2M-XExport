@@ -207,12 +207,13 @@ form: `xexport current --session-id "$CLAUDE_CODE_SESSION_ID" ...`.
 One parse of the session jsonl per turn, and, on a turn that changed something, one
 render of the HTML: every page, `full.html` and the index. Only the files whose content
 changed are rewritten, so earlier pages keep their modified time and a synced folder
-re-uploads the last page, `full.html` and the index rather than the whole export.
-Measured 2026-10-02 with 0.3.0 on two large real transcripts: 2.2 s for an 11.5 MB
-one (4,687 messages, 125 pages) and 1.3 s for a 10.7 MB one; 0.6 to 0.9 s when nothing
-had changed, most of it process start-up. The first refresh after upgrading the CLI is
-the slow one, because it writes every page of the export afresh (several seconds for
-the 125-page one). Measure it on the largest
+re-uploads the last page, `full.html` and the index rather than the whole export
+(a retitled chat is the exception: the title is on every page).
+Measured 2026-10-02 with 0.3.0 on two large real transcripts: about 2 s for an
+11.5 MB one (4,687 messages, 135 pages) and about 1.2 s for a 10.7 MB one; 0.6 to 0.9 s
+when nothing had changed, most of it process start-up. A refresh that writes many pages
+at once is slower (5 s was seen), and the first refresh after upgrading the CLI is one
+of those, because it writes every page of the export afresh. Measure it on the largest
 real transcript in the project before installing this in a repo with very long sessions:
 
 ```bash

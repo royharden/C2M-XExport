@@ -238,9 +238,9 @@ estimated tokens, 1,500 lines or 200 KB, whichever comes first. Nothing is cut t
 a prompt too big for a page is split between messages, and a single message too big for
 a page gets its own page and a flag. The index opens with a page map, because the index
 itself cannot be kept under the cap and a truncated read shows the top. `full.html`
-carries everything in one file for search. The same session is now 26 pages: 25 of
-6 to 42 KB, and one flagged oversize page holding a single 60 KB tool result. Each of the
-25 was read whole by the Read tool, with no partial-view notice.
+carries everything in one file for search. The same session is now 27 pages: 26 of
+6 to 39 KB, and one flagged oversize page holding a single 60 KB tool result. Each of the
+26 was read whole by the Read tool, with no partial-view notice.
 
 **The second half is the part that was nearly got wrong.** The budget is in tokens, and
 the plan was to estimate them as bytes / 3, validated against tiktoken, which measured
@@ -260,12 +260,17 @@ runs) **and per run**, because what makes a hexdump or an id expensive is not it
 characters but that it is many short runs. The first calibration had only the
 per-character weights, fitted on thirteen classes, and looked finished: every real page
 within 1% under to 24% over. A reviewer then fed it hexdumps, short ids and random-case
-words, none of them among the thirteen, and it was 39% to 57% under. The weights are now
-the solution of a linear program over 25 synthetic classes and 34 real pages: the real
-pages come out 4% to 19% over, and no class more than 8% under, with one exception that
-is recorded rather than fixed. Words of random lowercase letters look exactly like prose
-to anything that is not a tokenizer, cost about three times as much, and are estimated
-at half their real count. `scripts/validate_token_estimate.py` holds the data and the
+words, none of them among the thirteen, and it was 39% to 57% under. Refitted on 25
+classes, it looked finished again, and a second reviewer found Indonesian and Swahili
+prose 27% to 29% under: the letter weights had been set by English, Spanish and German.
+The weights are now the solution of a linear program over 29 synthetic classes and 34
+real pages. The real pages come out 10% to 30% over; no class is more than 8% under
+except three held to 15% (Indonesian, Swahili, lowercase ids), which the gap between
+the budget and the cap still covers; and one kind of content is recorded as a known
+failure rather than fixed. Random lowercase letters, which in practice means generated
+names such as `css-kqzvbn`, look exactly like prose to anything that is not a
+tokenizer, cost about three times as much, and are estimated at about 60% of their
+real count. A page made mostly of them is over the cap and is not flagged. `scripts/validate_token_estimate.py` holds the data and the
 check, and a test pins the weights to it.
 
 The calibration classes are a sample, and the estimate is only as good as the sample is

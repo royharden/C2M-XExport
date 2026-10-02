@@ -111,9 +111,10 @@ so 25,000 tokens is only 50 to 65 KB.
 - The index and the pages share `xexport.css` and `xexport.js`; `full.html` carries its
   own copy so that it still works when sent on its own.
 
-A page that already has a successor is never rewritten by a later refresh: appending
-turns changes the last page, `full.html` and the index, and adds pages. Links into
-earlier pages stay valid, and a synced folder re-uploads only what changed.
+Appending turns changes the last page, `full.html` and the index, and adds pages. A
+page that already has a successor keeps the same messages for good, so links into it
+stay valid, and it is not written again unless the chat is retitled (the title is on
+every page), so a synced folder re-uploads only what changed.
 
 The budget can be moved with `XEXPORT_PAGE_MAX_TOKENS`, `XEXPORT_PAGE_MAX_LINES` and
 `XEXPORT_PAGE_MAX_BYTES`. They are environment variables rather than flags on purpose:
@@ -126,11 +127,15 @@ included), or each will undo the other's layout.
 Tokens are estimated, not counted: no tokenizer ships with the CLI, and the one that
 matters cannot be run locally. The estimate weights each class of character and each
 run of letters or digits, and was calibrated against the counts Claude Code's Read tool
-reports on 25 kinds of content and 34 real pages;
+reports on 29 kinds of content and 34 real pages;
 `scripts/validate_token_estimate.py` holds the calibration data and re-checks it. On
-the real pages it is 4% to 19% over. It can still be well under on content unlike
-anything it was calibrated on (strings of random lowercase letters are the known case),
-and other readers count differently, so the limits are a margin, not a guarantee.
+the real pages it is 10% to 30% over. It is calibrated on English, code and tool
+output. Other languages cost the reader more per letter: Indonesian and Swahili prose
+are estimated about 15% under, which the margin still covers, and a language further
+out would not be. Machine-generated lowercase names (`css-kqzvbn`) look like prose to
+anything short of a tokenizer and are estimated at about 60% of their real count, so a
+page made mostly of them is read only in part. Other readers count differently again.
+The limits are a margin, not a guarantee.
 
 The title shown on a page is capped at 80 characters, and a page carries neither the
 xexport version nor the export time, so that retitling a chat or upgrading xexport

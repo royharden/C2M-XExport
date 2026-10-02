@@ -230,18 +230,28 @@ class TestPrefixStability:
         longer title moved the cuts: nine pages in ten then held different
         messages, and every link into them pointed at the wrong page."""
         _limits(monkeypatch, tokens=3000)
-        before, after = tmp_path / "before", tmp_path / "after"
-        s = _session(20, replies=2)
-        s.title = "A"
-        render_html(s, before)
-        s.title = "A much longer title, retitled mid-session: 日本語のタイトル & <more> " * 3
-        s.messages.append(_user("one more prompt"))
-        render_html(s, after)
-        closed = _pages(before)[:-1]
-        assert len(closed) >= 3
-        for page in closed:
-            assert _message_ids(_read(page)) == _message_ids(_read(after / page.name))
-        _assert_within(after)
+        # One prompt with many tiny replies packs every page to within a few
+        # tokens of the limit, so any title cost that leaks into the budget
+        # shows up as a moved cut.
+        for number, title in enumerate([
+                "<" * 200,                                   # every character an entity
+                "日本語のタイトル & <more> " * 9,
+                "a\nb\n" * 40,                               # line breaks in a title
+                "😀" * 200]):
+            before = tmp_path / f"before{number}"
+            after = tmp_path / f"after{number}"
+            s = _session(1, replies=120, reply="w")
+            s.title = "A"
+            render_html(s, before)
+            s.title = title
+            s.messages.append(_assistant("one more message"))
+            render_html(s, after)
+            closed = _pages(before)[:-1]
+            assert len(closed) >= 3
+            for page in closed:
+                assert (_message_ids(_read(page))
+                        == _message_ids(_read(after / page.name))), (title, page.name)
+            _assert_within(after)
 
     def test_pages_do_not_carry_the_xexport_version(self, tmp_path):
         """A version on every page would rewrite every page on every upgrade."""
@@ -498,12 +508,14 @@ class TestIndex:
     def test_dividers_mark_only_pages_that_open_with_a_prompt(
             self, tmp_path, monkeypatch):
         _limits(monkeypatch, tokens=3000)
-        s = _session(1, replies=40)
+        s = _session(2, reply="short")          # two prompts that share page 1
+        s.messages.extend(_session(1, replies=40).messages)
         s.messages.append(_user("second"))
         s.messages.append(_assistant("word " * 1200))
         s.messages.append(_user("third"))
         s.messages.append(_assistant("short"))
         render_html(s, tmp_path)
+        assert len(_message_ids(_read(tmp_path / "page-001.html"))) == 4
         index = _read(tmp_path / "index.html")
         dividers = [int(n) for n in
                     re.findall(r'class="page-divider" id="page-(\d+)"', index)]
@@ -567,12 +579,13 @@ class TestEstimator:
                 continue
             real = module.READ_TOOL_TOKENS[name]
             estimate = estimate_tokens(text)
-            assert estimate >= 0.9 * real, name
+            assert estimate >= module.floor_for(name) * real, name
             # And not wildly over: an estimate several times too high would pass
             # the floor while cutting pages into slivers.
-            assert estimate <= 1.6 * real, name
+            assert estimate <= 1.8 * real, name
             checked += 1
-        assert checked >= 24
+        assert checked >= 27
+        assert all(floor >= 0.84 for floor in module.RELAXED_FLOOR.values())
 
 
 # ------------------------------------------------------- upgrade through the CLI

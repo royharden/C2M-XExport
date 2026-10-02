@@ -50,15 +50,19 @@ same conversation.
 
 - A `page-NNN.html` closes before it reaches **20,000 estimated tokens, 1,500 lines or
   200 KB**, whichever comes first, measured on the file as written. In practice the
-  token limit decides, and a full page is 25 to 50 KB.
+  token limit decides, and a full page is 25 to 40 KB.
 - A page that could not be made to fit is marked. It holds exactly one message that is
   larger than a page, it says "Oversize page" at its top, and its row in the page map
   says `OVERSIZE: read in slices`. Nothing is ever truncated to make a page fit.
 - Pages break between prompts when they can. A page that begins in the middle of a
   prompt says "Continues prompt #N" at its top.
 - While a chat is still running, every page except the last is final: later turns never
-  change it. The last page, `full.html` and the index are rewritten as the chat grows,
-  and the prompt in progress can move from the last page to a new one.
+  change which messages it holds. The last page, `full.html` and the index are rewritten
+  as the chat grows, and the prompt in progress can move from the last page to a new one.
+- Sizes are estimates, calibrated on English, code and tool output. A page of text in
+  some other languages, or one dominated by machine-generated lowercase names, can be
+  larger than its estimate and come back partial. The check does not change: the last
+  line of a complete read is `</html>`.
 - `index.html` and `full.html` are **not** sized to a read. On a long session the index
   alone is hundreds of KB. That is why the page map is the first thing in it.
 - Message anchors are global: `page-003.html#msg-57` and `full.html#msg-57` are the same
@@ -141,14 +145,20 @@ refused. Take that line in character slices through a shell instead (25,000 char
 at a time keeps under what a shell tool returns):
 
 ```bash
+awk 'length > 2000 {print FNR, length}' page-020.html    # which lines are long, and how long
 sed -n '18p' page-020.html | cut -c1-25000
 sed -n '18p' page-020.html | cut -c25001-50000
 ```
 
 ```powershell
-(Get-Content -LiteralPath page-020.html)[17].Substring(0, 25000)      # line 18 is index 17
-(Get-Content -LiteralPath page-020.html)[17].Substring(25000, 25000)
+$line = (Get-Content -LiteralPath page-020.html)[17]      # line 18 is index 17
+$line.Length
+$line.Substring(0, [Math]::Min(25000, $line.Length))
+$line.Substring(25000, [Math]::Min(25000, $line.Length - 25000))   # and so on, while the start is below the length
 ```
+
+`cut -c` counts bytes in some builds, so a slice boundary can fall inside a non-ASCII
+character; the character is damaged, nothing else is.
 
 ### Cursor (agent read tool)
 

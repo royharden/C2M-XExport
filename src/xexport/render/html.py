@@ -67,20 +67,26 @@ PAGE_MAX_BYTES = 200_000
 # what makes hexdumps, ids and random-case strings expensive is that they are
 # many short runs, so the runs are counted too.
 # The weights are the solution of a linear program: the smallest over-count of 34
-# real pages such that no real page is under-counted and no synthetic class is
-# more than 8% under. Changing one changes where pages are cut: bump HTML_LAYOUT
-# with it, or existing exports keep their old cuts until they next grow.
-TOKENS_PER_LETTER = 0.20        # A-Z a-z
+# real pages such that no real page is under-counted, no measured class is more
+# than 8% under, and three harder ones (Indonesian and Swahili prose, lowercase
+# ids) no more than 15% under, which the 20% between the budget and the reader's
+# cap still covers. What it cannot do is tell words from random lowercase
+# letters: those cost the reader about three times as much as prose and are
+# estimated at around 60% of their real count. The classes, the counts and the
+# exceptions are in scripts/validate_token_estimate.py. Changing a weight changes
+# where pages are cut: bump HTML_LAYOUT with it, or existing exports keep their
+# old cuts until they next grow.
+TOKENS_PER_LETTER = 0.26        # A-Z a-z
 TOKENS_PER_LETTER_RUN = 0.35    # a word, or one hump of a camelCase name
-TOKENS_PER_SHORT_RUN = 1.42     # added per letter run of 1 or 2: "3f a2", "xQ"
-TOKENS_PER_LONG_LETTER = 1.41   # added per letter past the 8th of one run
-TOKENS_PER_DIGIT = 0.34
-TOKENS_PER_DIGIT_RUN = 0.52
+TOKENS_PER_SHORT_RUN = 1.28     # added per letter run of 1 or 2: "3f a2", "xQ"
+TOKENS_PER_LONG_LETTER = 2.44   # added per letter past the 8th of one run
+TOKENS_PER_DIGIT = 0.59
+TOKENS_PER_DIGIT_RUN = 0.33
 TOKENS_PER_SPACE = 0.40
-TOKENS_PER_NEWLINE = 2.0
-TOKENS_PER_OTHER_ASCII = 0.74   # punctuation, and the entities autoescape emits
-TOKENS_PER_NON_ASCII_BYTE = 0.36
-TOKENS_PER_ASTRAL_CHAR = 1.08   # added per 4-byte character: emoji
+TOKENS_PER_NEWLINE = 1.0
+TOKENS_PER_OTHER_ASCII = 0.60   # punctuation, and the entities autoescape emits
+TOKENS_PER_NON_ASCII_BYTE = 0.375
+TOKENS_PER_ASTRAL_CHAR = 1.10   # added per 4-byte character: emoji
 TOKENS_PER_OPAQUE_CHAR = 0.20   # added per character of a long unbroken run
 _OPAQUE_RUN = re.compile(rb"[A-Za-z0-9]{20,}")   # hashes, base64, minified blobs
 _LETTER_RUN = re.compile(rb"[A-Z]?[a-z]+|[A-Z]+")
@@ -99,10 +105,12 @@ HTML_LAYOUT = 2
 # A chat is retitled while it runs, and the title is on every page. So that a new
 # title can never move a page cut (and with it every link into the pages after
 # it), a page is budgeted as if its title cost this much, whatever it really is,
-# and the title shown on a page is capped to what that covers.
+# and the title shown on a page is capped to what that covers: one line of at
+# most 80 characters, shown twice. The worst such title under the weights above
+# is 80 characters that each escape to an entity, about 540 tokens and 800 bytes.
 PAGE_TITLE_CHARS = 80
 PAGE_TITLE_BYTES = 1_000
-PAGE_TITLE_TOKENS = 450
+PAGE_TITLE_TOKENS = 650
 
 _markdown = mistune.create_markdown(
     escape=True, plugins=["table", "strikethrough", "url"]
@@ -279,8 +287,9 @@ def _publish(path: Path, text: str) -> None:
     """Write `text` unless the file already holds exactly that.
 
     A page that already has a successor renders byte-identically on every later
-    refresh. Rewriting it anyway would move its mtime each turn, and under
-    OneDrive that is a re-upload of the whole export after every answer.
+    refresh, unless the chat was retitled. Rewriting it anyway would move its
+    mtime each turn, and under OneDrive that is a re-upload of the whole export
+    after every answer.
     """
     data = text.encode("utf-8")
     try:
@@ -459,7 +468,7 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
     # ---- pack
     page_tpl = env.get_template("page.html")
 
-    title = session.title or ""
+    title = " ".join((session.title or "").split())    # one line, always
     if len(title) > PAGE_TITLE_CHARS:
         title = title[:PAGE_TITLE_CHARS - 1] + "…"
 
@@ -481,7 +490,10 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
         # A shell differs from page to page only in the digits of the numbers
         # it prints, and every digit weighs the same, so shells whose numbers
         # have the same widths have the same size.
-        key = tuple(len(str(n)) for n in (number - 1, number, number + 1, continues))
+        # A continuation page has a note the others do not, so it is its own
+        # case, not just a different width of the number in the note.
+        key = (bool(continues),) + tuple(
+            len(str(n)) for n in (number - 1, number, number + 1, continues))
         if key not in shell_sizes:
             blank = _Page(number, continues=continues)
             sizes = [_size(render_page(blank, has_next=state, page_title=""))

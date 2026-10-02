@@ -39,10 +39,11 @@ browser DOM).
 - **An HTML page is one whole read for an agent's file-read tool.** Pages are packed by
   size (`render/html.py`: estimated tokens, lines, bytes; whichever is reached first),
   never by a prompt count, and never by cutting content: an oversize message gets its
-  own flagged page. The packing is prefix-stable, so a page that has a successor is
-  byte-identical on every later refresh. Keep anything that changes per run (export
-  time, page total, a list of all pages) out of the page template, or that stops being
-  true. Changing what an export folder holds, or how pages are cut, means bumping
+  own flagged page. The packing is prefix-stable, so a page that has a successor holds
+  the same messages on every later refresh, and the same bytes unless the chat is
+  retitled. Keep anything that changes per run (export time, page total, a list of all
+  pages, the xexport version) out of the page template, and anything of variable size
+  (the title) out of the page budget, or that stops being true. Changing what an export folder holds, or how pages are cut, means bumping
   `HTML_LAYOUT` so existing exports are re-rendered.
 - **No new flags in the hook recipes.** An unknown flag against an older installed CLI
   is a usage error (exit 2), which in a `Stop` hook is a blocked turn. Tunables that a
