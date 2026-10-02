@@ -1,7 +1,7 @@
 # AGENTS.md — C2M-XExport
 
 Python CLI (`xexport`) + agent skills that export Claude Code, Codex, Cursor Agent, and Grok CLI
-chat sessions to paginated HTML or Markdown. Sibling of the C2M Chat-to-Markdown
+chat sessions to HTML (size-packed pages, an index with a page map, and one full.html) or Markdown. Sibling of the C2M Chat-to-Markdown
 Chrome extension (same mission, different surface: local session stores instead of
 browser DOM).
 
@@ -36,6 +36,17 @@ browser DOM).
 - **The content filters are privacy controls, not Markdown styling.** `--brief`,
   `--no-tools` and `--no-thinking` must reach every format a run produces. Filter on the
   neutral model in `render/__init__.filtered`, never in one renderer.
+- **An HTML page is one whole read for an agent's file-read tool.** Pages are packed by
+  size (`render/html.py`: estimated tokens, lines, bytes; whichever is reached first),
+  never by a prompt count, and never by cutting content: an oversize message gets its
+  own flagged page. The packing is prefix-stable, so a page that has a successor is
+  byte-identical on every later refresh. Keep anything that changes per run (export
+  time, page total, a list of all pages) out of the page template, or that stops being
+  true. Changing what an export folder holds, or how pages are cut, means bumping
+  `HTML_LAYOUT` so existing exports are re-rendered.
+- **No new flags in the hook recipes.** An unknown flag against an older installed CLI
+  is a usage error (exit 2), which in a `Stop` hook is a blocked turn. Tunables that a
+  hook might need are environment variables (`XEXPORT_PAGE_MAX_*`).
 
 ## Layout
 
@@ -43,14 +54,20 @@ browser DOM).
 - `src/xexport/sources/` — `claude.py`, `codex.py`, `cursor.py`, `grok.py`: store discovery, title
   resolution, jsonl → IR.
 - `src/xexport/render/` — `markdown.py`; `html.py` + `templates/` (adapted from
-  claude-code-transcripts, Apache-2.0 — keep the NOTICE attribution).
+  claude-code-transcripts, Apache-2.0 — keep the NOTICE attribution). `html.py` writes
+  `page-NNN.html`, then `full.html`, then `index.html` last, plus the shared
+  `xexport.css` / `xexport.js`; it also owns the page budget, the token estimate and
+  the layout version.
+- `scripts/validate_token_estimate.py` — dev-only: the calibration data for the token
+  estimate and the check against it (`uv run python scripts/validate_token_estimate.py
+  --synthetic`; add `--with tiktoken` and an export folder for a per-file table).
 - `src/xexport/titles.py` — Windows-safe name sanitization; `detect.py` — current-session detection.
 - `src/xexport/naming.py` — export names: the `{agent} -- {title} -- {identity}` template
   and AgentNamer callsign resolution. `agentnamer.py` — read-only lookup of an existing
   callsign registry. `cursors.py` — the record each export keeps of what it was made
   from. `publish.py` — atomic writes and the per-session lock.
 - `src/xexport/cli.py` — click CLI; console script `xexport`.
-- Skills: canonical copies live in `PJ-OD\skills\skills-bts\xexport-html|md|auto\` (NOT in this repo);
+- Skills: canonical copies live in `PJ-OD\skills\skills-bts\xexport-html|md|auto|read\` (NOT in this repo);
   `skills/` here holds the templates they are generated from. Follow the
   `sync-skills-across-agents` skill for any skill change.
 

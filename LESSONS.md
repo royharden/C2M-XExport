@@ -219,6 +219,70 @@ what the check was actually protecting against before relaxing it. "This mechani
 have that failure any more" is a claim about the mechanism; the guard was usually about
 the *data*.
 
+---
+
+## 12. A page count is not a page size, and somebody else's tokenizer is not yours
+
+HTML exports were paginated five prompts to a page. That is a count of prompts, and the
+thing pagination exists for is a property of the *file*: an agent that opens a page with
+a file-read tool gets only part of it once the file passes that tool's caps, and what it
+gets looks like a whole document. Claude Code's Read tool stops at whichever comes first
+of 2,000 lines, 25,000 tokens and about 256 KB. On one real 3.9 MB session, five-prompt
+pages came out at 94 KB, 114 KB, 242 KB and 398 KB (the last two 3,799 and 4,433 lines),
+and the index at 108 KB. Every one of them, the index included, was over the token cap.
+Nothing failed. The pages were simply never read to the end.
+
+**Changed (0.3.0):** pages are packed by size, on the file as written, closing at 20,000
+estimated tokens, 1,500 lines or 200 KB, whichever comes first. Nothing is cut to fit:
+a prompt too big for a page is split between messages, and a single message too big for
+a page gets its own page and a flag. The index opens with a page map, because the index
+itself cannot be kept under the cap and a truncated read shows the top. `full.html`
+carries everything in one file for search. The same session is now 25 pages: 24 of
+6 to 47 KB, and one flagged oversize page holding a single 60 KB tool result. Each of the
+24 was read whole by the Read tool, with no partial-view notice.
+
+**The second half is the part that was nearly got wrong.** The budget is in tokens, and
+the plan was to estimate them as bytes / 3, validated against tiktoken, which measured
+3.25 to 3.64 bytes per token on these pages. But the cap being protected is enforced by
+the Read tool's own count, and that tool reports its count whenever it refuses a read.
+Asked directly, it counted **1.40 to 1.46 times what tiktoken does**: 2.0 to 2.6 bytes
+per token on the same pages. Pages packed to 20,000 "tokens" at bytes / 3 would have
+been 23,000 to 30,000 by the only count that matters, and the fix would have shipped
+with its own bug still in it, validated.
+
+A flat ratio could not be rescued by picking a smaller number either. The same reader
+counted 3.9 bytes per token on Russian prose, 2.75 on English, 1.5 on hex and
+escaped JSON, and 1.05 on base64, and a page of tool output is made of the last three.
+The estimate is therefore a weight per character class (letters, digits, spaces,
+newlines, other ASCII, non-ASCII bytes, with extra for emoji and for long unbroken runs),
+fitted to the Read tool's reported counts on thirteen synthetic classes and checked
+against 34 real pages: between 1% under and 24% over on the real pages, and never more
+than 10% under on any class. `scripts/validate_token_estimate.py` holds the data and the check, and a
+test pins the weights to it.
+
+What could not be verified: any reader other than Claude Code's Read tool, on any model
+other than the one that ran the measurement (Claude Fable 5.1, 2026-10-02). Cursor's
+2,000-line default and Codex's shell-output limit are reported, not measured.
+
+**The general lesson:** when a limit is enforced by someone else's counter, measure with
+*that* counter, even if it can only be reached indirectly. A proxy that is convenient to
+run (tiktoken) and agrees with itself is still a proxy, and the error here was 40% in
+the unsafe direction. And when sizing by a count of things (prompts, messages, rows),
+ask what the consumer's limit is actually denominated in; it is almost never the thing
+that was easy to count.
+
+Two smaller things the same work turned up:
+
+- A page that states the page total, the export time, or a link to every other page is
+  rewritten on every refresh, so no page is ever stable and a synced folder re-uploads
+  the whole export after every turn. Pages now carry none of the three, and a page with
+  a successor is byte-identical from then on.
+- "Nothing changed, so nothing to do" was decided on the transcript alone. An export
+  written before `full.html` existed would never have gained one. The export's record
+  now carries the layout it was written in, as a new field rather than a new record
+  version, because a higher record version makes an older build refuse the export and
+  fork a copy beside it.
+
 
 ## Native Codex session_id can identify the parent
 

@@ -4,12 +4,23 @@
 {% block content %}
         <h1>{{ session.title }}</h1>
         <p class="subtitle">{{ session.app }} transcript{% if session.cwd %} · <code>{{ session.cwd }}</code>{% endif %}</p>
-        {{ m.pagination(0, total_pages, index_current=true) }}
+        <p class="page-note">Page map. Each page-NNN.html holds the complete content of its prompts and is sized to fit one whole-file read (at most about {{ limits.tokens }} estimated tokens, {{ limits.lines }} lines, {{ limits.bytes // 1000 }} KB). <a href="full.html">full.html</a> is everything in one file, for searching rather than reading whole. The cards below this map are a summary: one per prompt.</p>
+        <table class="page-map">
+        <tr><th>Page</th><th>Prompts</th><th>#msg-N</th><th>First timestamp</th><th>Lines</th><th>KB</th><th>Est. tokens</th><th>Note</th></tr>
+{% for p in page_map %}
+        <tr data-page="{{ p.number }}"><td><a href="{{ p.href }}">{{ p.href }}</a></td><td>{{ p.prompts }}</td><td>{{ p.messages }}</td><td>{{ p.ts }}</td><td>{{ p.lines }}</td><td>{{ p.kb }}</td><td>{{ p.tokens }}</td><td>{{ p.notes }}</td></tr>
+{% endfor %}
+        </table>
+        {{ m.nav('index') }}
         <p style="color: var(--text-muted); margin-bottom: 24px;">{{ stats.prompts }} prompts · {{ stats.messages }} messages · {{ stats.tool_calls }} tool calls · {{ total_pages }} page{{ 's' if total_pages != 1 }}</p>
-        {% for item in index_items %}
-<div class="index-item"><a href="{{ item.href }}"><div class="index-item-header"><span class="index-item-number">#{{ item.number }}</span>{% if item.ts %}<time datetime="{{ item.ts }}" data-timestamp="{{ item.ts }}">{{ item.ts }}</time>{% endif %}</div><div class="index-item-content">{{ item.prompt_html }}</div></a>{% if item.stats_line or item.long_html %}<div class="index-item-stats">{% if item.stats_line %}<span>{{ item.stats_line }}</span>{% endif %}
+{% for item in index_items %}
+{% if item.starts_page %}
+        <div class="page-divider" id="page-{{ item.page }}"><a href="{{ page_name(item.page) }}">Page {{ item.page }} starts here</a></div>
+{% endif %}
+<div class="index-item"><a href="{{ item.href }}"><div class="index-item-header"><span class="index-item-number">#{{ item.number }} <span class="page-badge">{{ item.pages_label }}</span></span>{% if item.ts %}<time datetime="{{ item.ts }}" data-timestamp="{{ item.ts }}">{{ item.ts }}</time>{% endif %}</div><div class="index-item-content">{{ item.prompt_html }}</div></a>{% if item.stats_line or item.long_html %}<div class="index-item-stats">{% if item.stats_line %}<span>{{ item.stats_line }}</span>{% endif %}
+
 {% if item.long_html %}<div class="index-item-long-text"><div class="truncatable"><div class="truncatable-content"><div class="index-item-long-text-content">{{ item.long_html }}</div></div><button class="expand-btn">Show more</button></div></div>{% endif %}
 </div>{% endif %}</div>
-        {% endfor %}
-        {{ m.pagination(0, total_pages, index_current=true) }}
+{% endfor %}
+        {{ m.nav('index') }}
 {% endblock %}

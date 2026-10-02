@@ -97,8 +97,8 @@ def options_fingerprint(*, brief: bool, include_tools: bool,
 
 # ------------------------------------------------------------------------ records
 def make(session: Session, *, messages: int, run: int, opts: str = "",
-         forked: bool = False) -> dict:
-    return {
+         forked: bool = False, layout: str = "") -> dict:
+    record = {
         "v": CURSOR_V,
         # True when this export was written beside one that was refused. It is what
         # tells the next run that this companion, and not the untouchable original,
@@ -115,6 +115,12 @@ def make(session: Session, *, messages: int, run: int, opts: str = "",
         "tool": __version__,
         "title": (session.title or "")[:TITLE_IN_MARKER],
     }
+    if layout:
+        # HTML only: which files the folder holds and how its pages were cut. A
+        # new field rather than a new CURSOR_V, because a higher version makes an
+        # older build refuse the export and fork a companion beside it.
+        record["layout"] = layout
+    return record
 
 
 def marker_line(data: dict) -> str:
@@ -176,10 +182,16 @@ def write_html_marker(folder: Path, data: dict) -> None:
 
 
 # --------------------------------------------------------------------- validation
-def validate(data: dict, session: Session, *, opts: str = "") -> tuple[str, str]:
+def validate(data: dict, session: Session, *, opts: str = "",
+             layout: str = "") -> tuple[str, str]:
     """Return (verdict, detail) for refreshing the export `data` came from.
 
     verdict: "ok" | "uptodate" | "shrink" | "options" | "unsupported"
+
+    `layout` is the layout an HTML caller would write now. An export recorded with
+    a different one (or, before 0.3.0, none) is never "uptodate": it is re-rendered
+    so that it gains the files and page cuts of the current layout. The refusals
+    are decided first, so a layout change cannot carry an export past them.
 
     An export is refreshed by re-rendering the whole document, so a transcript that
     was edited, retried, compacted or reordered behind the last export needs no
@@ -230,6 +242,8 @@ def validate(data: dict, session: Session, *, opts: str = "") -> tuple[str, str]
 
     # Exact change detection: the digest covers every message and block, so an
     # edited or retried turn is caught even though the count did not move.
+    if layout and str(data.get("layout") or "") != layout:
+        return "ok", ""
     previous_digest = str(data.get("digest") or "")
     if previous_digest and previous_digest == content_digest(session):
         return "uptodate", ""

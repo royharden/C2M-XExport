@@ -1,6 +1,6 @@
 [project]
 name = "xexport"
-version = "0.2.3"
+version = "0.3.0"
 description = "Export Claude Code, Codex (ChatGPT/Codex CLI), Cursor Agent, and Grok CLI sessions to paginated HTML or Markdown transcripts"
 readme = "README.md"
 requires-python = ">=3.11"

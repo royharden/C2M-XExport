@@ -16,7 +16,7 @@ import click
 
 from . import __version__, cursors, detect, naming, publish
 from .model import ASSISTANT_TEXT, Block, Message, Session
-from .render.html import render_html
+from .render.html import layout_key, render_html
 from .render.markdown import render_markdown
 from .sources import claude, codex, cursor, grok
 from .titles import unique_path
@@ -410,8 +410,9 @@ def _export_md(session: Session, opt: Options, name: str, md_dir: Path) -> tuple
 def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> tuple[Path, str, str]:
     """Write or refresh the paginated HTML export.
 
-    The same rules as Markdown, on a folder: refreshing re-renders every page into
-    the existing folder and prunes any page a shorter render left behind.
+    The same rules as Markdown, on a folder: refreshing re-renders every page,
+    full.html and the index into the existing folder and prunes any page a
+    shorter render left behind.
     """
     total = len(session.messages)
     existing = None
@@ -426,8 +427,11 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
 
     if existing is not None:
         folder, data = existing
+        # Passing the layout is what lets an export written by an older version
+        # (five prompts per page, no full.html) refresh into the current one even
+        # though its transcript has not changed.
         verdict, detail = cursors.validate(
-            data, session, opts=opt.html_opts_fingerprint)
+            data, session, opts=opt.html_opts_fingerprint, layout=layout_key())
         if verdict == "uptodate" and opt.mode == "append":
             when = str(data.get("updated", ""))[:16].replace("T", " ")
             return folder / "index.html", "uptodate", (
@@ -442,7 +446,7 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
             index_path = render_html(session, folder, **opt.html_kwargs)
             cursors.write_html_marker(folder, cursors.make(
                 session, messages=total, run=run, opts=opt.html_opts_fingerprint,
-                forked=bool(data.get("forked"))))
+                forked=bool(data.get("forked")), layout=layout_key()))
             return index_path, "updated", f"{total} messages, refresh {run}"
 
     html_dir.mkdir(parents=True, exist_ok=True)
@@ -453,7 +457,7 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
     index_path = render_html(session, folder, **opt.html_kwargs)
     cursors.write_html_marker(folder, cursors.make(
         session, messages=total, run=1, opts=opt.html_opts_fingerprint,
-        forked=refused))
+        forked=refused, layout=layout_key()))
     return index_path, "wrote", ""
 
 
@@ -474,7 +478,9 @@ def _path_budget(html_dir: Path, fallback: int) -> int:
     # longer, and with --json the raw sidecar is longer still. Reserving only the
     # page let render_html succeed and then write_html_marker raise, leaving a
     # folder with no marker -- which the next run cannot verify.
-    deepest = max(len("\\page-001.html"), len("\\.xexport-cursor.json"))
+    # Page names grow past 999 (page-1000.html), so reserve a seven-digit page
+    # rather than assume three; full.html and index.html are shorter than both.
+    deepest = max(len("\\page-0000000.html"), len("\\.xexport-cursor.json"))
     budget = 260 - base - deepest - 1
     return max(40, min(fallback, budget))
 

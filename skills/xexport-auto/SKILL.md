@@ -57,12 +57,12 @@ that file is a known-good example.
   "hooks": {
     "Stop": [
       { "hooks": [ { "type": "command",
-        "command": "xexport current --from-hook --format md --mode append --quiet --callsign auto --out \"$CLAUDE_PROJECT_DIR/.chatexports\" || exit 0"
+        "command": "xexport current --from-hook --format html --mode append --quiet --callsign auto --out \"$CLAUDE_PROJECT_DIR/.chatexports\" || exit 0"
       } ] }
     ],
     "SubagentStop": [
       { "hooks": [ { "type": "command",
-        "command": "xexport subagents --from-hook --format md --mode append --quiet --callsign auto --out \"$CLAUDE_PROJECT_DIR/.chatexports\" || exit 0"
+        "command": "xexport subagents --from-hook --format html --mode append --quiet --callsign auto --out \"$CLAUDE_PROJECT_DIR/.chatexports\" || exit 0"
       } ] }
     ]
   }
@@ -107,8 +107,22 @@ Every part of that command line is load-bearing:
   carry the *parent's* last message.
 - **`--quiet`** keeps hook output out of the conversation. It suppresses `Note:` lines but
   never `Warning:` — a fork always stays visible.
-- Want HTML too: add `--format both`. The Markdown stays at `.chatexports\<name>.md` and
-  the HTML goes to `.chatexports\html\<name>\`.
+- **`--format html`** writes a folder per session at `.chatexports\html\<name>\`:
+  `index.html` (a page map, then one card per prompt), `page-NNN.html` (the full
+  content, each page sized to fit one read by an agent's file-read tool) and
+  `full.html` (everything in one file, for searching). It is the default since
+  2026-10 because the Markdown export is one file that outgrows a single read on any
+  long session. How to read what the hook writes is the sibling skill `xexport-read`.
+- Want Markdown too: add `--format both`. The HTML stays at `.chatexports\html\<name>\`
+  and the Markdown goes to `.chatexports\<name>.md`. Markdown is the leaner of the two
+  (about a third of the tokens of the HTML pages on a tool-heavy session, because it
+  cuts long tool output to 2,000 characters), so it is the one to add when a transcript
+  is mostly wanted for a quick whole read.
+- **Version:** the recipe needs nothing newer than xexport 0.2.0 -- `--format html` has
+  always existed, so it cannot be the unknown flag that loops a `Stop` hook. Size-based
+  pages, `full.html` and the page map need **0.3.0**; an older CLI runs the same recipe
+  and writes the older layout (five prompts per page, no `full.html`). After upgrading
+  the CLI, existing HTML exports are re-laid-out the next time each session is exported.
 
 ### Fidelity: these receipts are complete, not summaries
 
@@ -183,11 +197,17 @@ form: `xexport current --session-id "$CLAUDE_CODE_SESSION_ID" ...`.
 
 ### Cost
 
-One parse of the session jsonl per turn. Measure it on the largest real transcript in the
-project before installing this in a repo with very long sessions:
+One parse of the session jsonl per turn, and, on a turn that changed something, one
+render of the HTML: every page, `full.html` and the index. Only the files whose content
+changed are rewritten, so earlier pages keep their modified time and a synced folder
+re-uploads the last page, `full.html` and the index rather than the whole export.
+Measured 2026-10-02 with 0.3.0 on the two largest transcripts on Roy's machine: 1.4 s
+for an 11.5 MB transcript (4,687 messages, 127 pages) and 1.0 s for a 10.7 MB one;
+0.7 s when nothing had changed, most of it process start-up. Measure it on the largest
+real transcript in the project before installing this in a repo with very long sessions:
 
 ```bash
-xexport current --session-id <big session> --format md --mode append --out .chatexports
+xexport current --session-id <big session> --format html --mode append --out .chatexports
 ```
 
 ## Codex / Cursor: the boot section
@@ -207,7 +227,7 @@ reporting, and at the next available execution step when the last verified expor
 is older than 10 minutes (configurable). On a user status request, refresh if stale.
 
     xexport current --source <claude|codex|cursor|grok> --session-id "<exact own session id>" \
-        --format md --mode append --out "<project root>\.chatexports"
+        --format html --mode append --out "<project root>\.chatexports"
 
 - Session id: `CODEX_THREAD_ID` (Codex), `CURSOR_CONVERSATION_ID` (Cursor),
   `CLAUDE_CODE_SESSION_ID` (Claude Code), `GROK_SESSION_ID` (Grok). Do not use recency when an ID is absent.
@@ -223,7 +243,7 @@ is older than 10 minutes (configurable). On a user status request, refresh if st
   guards. It is not literal line appending; unchanged content is a no-op. Preserve
   guard warnings verbatim, protected originals, and any companion's provenance.
 - For children, require xexport **0.2.2+** on Codex. Parent-driven export is:
-  `xexport subagents --source <claude|codex|cursor> --session-id "<exact parent id>" --format md --mode append --out "<project root>\.chatexports"`.
+  `xexport subagents --source <claude|codex|cursor> --session-id "<exact parent id>" --format html --mode append --out "<project root>\.chatexports"`.
   Codex discovery includes direct children only; run again for each child with
   children of its own. Verify each returned ID against the explicitly linked child.
 - Native Codex children may self-export when runtime `CODEX_THREAD_ID` matches
@@ -239,6 +259,10 @@ is older than 10 minutes (configurable). On a user status request, refresh if st
   execution policy, not authorization to install a watcher or scheduled automation.
 - A receipt path you quote to another agent is a location, not permission to read it:
   transcripts hold the user's prompts and tool output.
+- Exports are folders under `.chatexports\html\`. To read one, yours or another
+  agent's, follow the `xexport-read` skill: page map in `index.html` first, then the
+  `page-NNN.html` files, each sized for one read. Add `--format both` to also keep a
+  single-file Markdown copy.
 <!-- xexport-auto:end -->
 ```
 
@@ -249,6 +273,11 @@ idempotent instead of appending a second copy.
 Older blocks prohibit all Codex child self-export based on an inherited-ID assumption;
 that does not describe native Codex children with independently verified thread IDs.
 Update only projects in the user's requested scope; do not sweep unrelated constitutions.
+
+Blocks and hooks installed before 2026-10 say `--format md`. They keep working. Moving a
+project to HTML is a change to that project, made when the user asks for it: replace
+the block and edit the hook commands. The project's existing `.md` exports are left
+where they are and simply stop being refreshed; `--format both` keeps them current.
 
 ## Adding it to a priming / constitution skill
 
@@ -265,7 +294,8 @@ The two are independent: AgentNamer names agents, xexport names files. The join 
 optional flag.
 
 - An agent that holds a callsign passes `--callsign "<its callsign>"`, and the export is
-  named `0007_Claude_Opus5 -- <chat title> -- claude-<session id>.md`. Without a
+  named `0007_Claude_Opus5 -- <chat title> -- claude-<session id>` (a folder under
+  `html\`, and that name plus `.md` for Markdown). Without a
   callsign the same field falls back to `<Harness>_<Model>`, so every export still names
   its agent and adopting AgentNamer later only adds the id.
 - In a hook there is no agent to ask, and none is needed: `auto` is the default and
@@ -277,18 +307,19 @@ optional flag.
 ## Checklist
 
 1. **Confirm `xexport --version` reports 0.2.2 or later for native Codex children**
-   (0.2.0 suffices for the older Claude/Cursor hooks).
+   (0.2.0 suffices for the older Claude/Cursor hooks; 0.3.0 for size-based pages and
+   `full.html`).
    `--mode`, `--from-hook`, `--callsign` and `subagents` do not exist in 0.1.1, and a
    hook built on them against an older CLI is the exit-2 turn loop described above.
    While you are there, dry-run the exact recipe you are about to install and check it
    exits 0 and reports the intended session ID (omit `--quiet` for this verification):
 
    ```
-   echo '{"session_id":"<a real session id>"}' | xexport current --from-hook --format md --out .chatexports
+   echo '{"session_id":"<a real session id>"}' | xexport current --from-hook --format html --out .chatexports
    ```
 
 2. **Resolve the executable the *hook* process can run, not the one your shell can.**
-   `xexport` lives in `~\.localin`, which is on an interactive shell's PATH but is
+   `xexport` lives in `~\.local\bin`, which is on an interactive shell's PATH but is
    not guaranteed to be on the PATH of a GUI-launched harness — and a hook that cannot
    find its command fails on every turn while looking, from the terminal, perfectly
    installed. Resolve it (`(Get-Command xexport).Source`, or `command -v xexport`) and
@@ -300,11 +331,12 @@ optional flag.
    any `.gitignore` without asking.
 4. Find every `.claude\settings.json` in the project and decide which one owns the
    policy. Install in exactly one.
-5. Back up that file, merge the hooks, restart the session, and confirm a file appears
-   in `.chatexports\` after the next turn.
+5. Back up that file, merge the hooks, restart the session, and confirm a folder
+   appears in `.chatexports\html\` after the next turn, holding `index.html`, at least
+   `page-001.html`, and (with 0.3.0 or later) `full.html`.
 6. Other harnesses: append the marked boot section to `AGENTS.md`.
-7. Run one subagent and confirm its transcript lands in `.chatexports\` beside the main
-   exports, named with its own full source/session identity — and that the parent transcript did
+7. Run one subagent and confirm its transcript lands in `.chatexports\html\` beside the
+   main exports, named with its own full source/session identity — and that the parent transcript did
    **not** get a second copy written under that name.
 8. Follow `sync-skills-across-agents` if the project keeps skill mirrors.
 

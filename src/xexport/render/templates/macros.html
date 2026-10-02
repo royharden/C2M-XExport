@@ -1,11 +1,17 @@
-{% macro pagination(current, total, index_current=false) -%}
+{# The navigation is the same size on every page: it never lists the pages, so a
+   session with hundreds of them does not grow each page's own overhead, and a page
+   that is already closed never has to be rewritten because the total changed. #}
+{% macro nav(current, number=0, has_next=false) -%}
 <div class="pagination">
-{% if index_current %}<span class="current">Index</span>{% else %}<a href="index.html" class="index-link">Index</a>{% endif %}
-{% if current > 1 %}<a href="page-{{ '%03d' % (current - 1) }}.html">&larr; Prev</a>{% elif not index_current %}<span class="disabled">&larr; Prev</span>{% endif %}
-{% for n in range(1, total + 1) %}
-{% if n == current and not index_current %}<span class="current">{{ n }}</span>{% else %}<a href="page-{{ '%03d' % n }}.html">{{ n }}</a>{% endif %}
-{% endfor %}
-{% if current < total %}<a href="page-{{ '%03d' % (current + 1) }}.html">Next &rarr;</a>{% elif index_current and total >= 1 %}<a href="page-001.html">Next &rarr;</a>{% else %}<span class="disabled">Next &rarr;</span>{% endif %}
+{% if current == 'index' %}<span class="current">Index</span>{% else %}<a href="index.html" class="index-link">Index</a>{% endif %}
+{% if current == 'full' %}<span class="current">Full</span>{% else %}<a href="full.html">Full</a>{% endif %}
+{% if current == 'page' %}
+{% if number > 1 %}<a href="{{ page_name(number - 1) }}">&larr; Prev</a>{% else %}<span class="disabled">&larr; Prev</span>{% endif %}
+<span class="current">Page {{ number }}</span>
+{% if has_next %}<a href="{{ page_name(number + 1) }}">Next &rarr;</a>{% else %}<span class="disabled">Next &rarr;</span>{% endif %}
+{% else %}
+<a href="{{ page_name(1) }}">Page 1 &rarr;</a>
+{% endif %}
 </div>
 {%- endmacro %}
 

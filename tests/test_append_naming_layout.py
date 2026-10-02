@@ -384,13 +384,16 @@ class TestAppendSafety:
     """The one property that matters: an append never drops or duplicates content."""
 
     def test_html_append_refuses_a_mismatch_instead_of_overwriting(self, claude_store,
-                                                                   tmp_path):
+                                                                   tmp_path, monkeypatch):
         """REGRESSION: _export_html treated only 'unsupported' as fatal, so a
         'mismatch' fell through to a full re-render **in place** — overwriting
         index.html and unlinking the now-surplus page-NNN.html files. An export of a
         longer transcript was destroyed with no warning and exit 0, while the Markdown
         path refused in the identical situation."""
         out = tmp_path / "exports"
+        # Pages are cut by size, so a small budget is what makes this fixture
+        # span several of them.
+        monkeypatch.setenv("XEXPORT_PAGE_MAX_LINES", "40")
         for i in range(6):
             _append_entries(claude_store, _turn(f"Prompt {i}", "x" * 50))
         _run("current", "--session-id", CLAUDE_SESSION_ID, "--format", "html",

@@ -68,7 +68,9 @@ class TestHtml:
         assert "<script>alert(1)</script>" not in page
         assert "alert(1)" in page  # still visible as text
 
-    def test_five_prompts_per_page(self, tmp_path):
+    def test_small_sessions_are_one_page_however_many_prompts(self, tmp_path):
+        """Pages are cut by size, not by a prompt count (it was five per page
+        through 0.2.3). The size rules are in test_html_pagination.py."""
         s = Session(source="claude", session_id="x", app="Claude Code",
                     title="Paging")
         for i in range(12):
@@ -77,7 +79,8 @@ class TestHtml:
         out = tmp_path / "html"
         render_html(s, out)
         pages = sorted(p.name for p in out.glob("page-*.html"))
-        assert pages == ["page-001.html", "page-002.html", "page-003.html"]
+        assert pages == ["page-001.html"]
+        assert (out / "full.html").is_file()
 
     def test_tool_icons_dont_crash_unknown_names(self, tmp_path):
         s = Session(source="codex", session_id="x", app="Codex", title="t")

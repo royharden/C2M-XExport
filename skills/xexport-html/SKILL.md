@@ -1,17 +1,31 @@
 ---
 name: xexport-html
-description: Export the current chat session to a paginated HTML transcript under .chatexports\html using the xexport CLI, either as a new export or by refreshing this session's existing one. Use when the user runs /xexport-html (Claude Code or Cursor), $xexport-html (Codex), or asks to export, save, archive, update, or add to this chat/session/conversation as HTML. In Codex use CODEX_THREAD_ID; in Cursor use CURSOR_CONVERSATION_ID.
+description: Export the current chat session to an HTML transcript under .chatexports\html using the xexport CLI (an index with a page map, pages sized to fit one agent file read, and a single full.html), either as a new export or by refreshing this session's existing one. Use when the user runs /xexport-html (Claude Code or Cursor), $xexport-html (Codex), or asks to export, save, archive, update, or add to this chat/session/conversation as HTML. In Codex use CODEX_THREAD_ID; in Cursor use CURSOR_CONVERSATION_ID.
 ---
 
 # xexport-html
 
-Export the CURRENT session to paginated HTML (index.html + page-NNN.html, in the
-claude-code-transcripts visual style) via the `xexport` CLI from
-`C:\Users\Roy Harden\OneDrive\PJ-OD\C2M\C2M-XExport`.
+Export the CURRENT session to HTML (in the claude-code-transcripts visual style) via
+the `xexport` CLI from `C:\Users\Roy Harden\OneDrive\PJ-OD\C2M\C2M-XExport`.
 
 HTML exports land in **`.chatexports\html\<name>\`**, one level below the Markdown
 exports. That is deliberate: an HTML export is a folder, and a pile of folders at the top
 level makes the Markdown files hard to find.
+
+## What the folder holds (xexport 0.3.0 and later)
+
+| File | What it is |
+|---|---|
+| `index.html` | A page map at the top (each page's prompts, message anchors, first timestamp, lines, KB, estimated tokens), then one card per prompt. |
+| `page-NNN.html` | The complete content, cut by size so that one page is one whole read for an agent's file-read tool: at most 20,000 estimated tokens, 1,500 lines or 200 KB. Nothing is truncated; a single message larger than a page gets its own page, marked oversize. |
+| `full.html` | Every message in one file, with the same `#msg-N` anchors. For searching and skimming; too large to read whole on a long session. |
+| `xexport.css`, `xexport.js` | Styling shared by the index and the pages. `full.html` carries its own copy, so it can be sent on its own. |
+| `.xexport-cursor.json` | xexport's record of what the export was made from. Leave it alone. |
+
+Earlier versions (0.2.3 and before) wrote five prompts per page whatever their size and
+no `full.html`. Refreshing such an export with 0.3.0 re-lays it out in place. When you
+tell the user where the export is, give the path to `index.html`. For how an agent
+should **read** an export, see the sibling skill `xexport-read`.
 
 ## Steps
 
@@ -110,6 +124,14 @@ level makes the Markdown files hard to find.
 - `--html-subdir ""` writes HTML flat into `.chatexports\` (the pre-0.2.0 layout) if the
   user explicitly asks for that.
 - Markdown instead: use the sibling skill `xexport-md`.
+- Reading an export, yours or another agent's: use the sibling skill `xexport-read`.
+- The page budget can be changed for one run with the environment variables
+  `XEXPORT_PAGE_MAX_TOKENS`, `XEXPORT_PAGE_MAX_LINES` and `XEXPORT_PAGE_MAX_BYTES`.
+  There are deliberately no flags for it. Leave the defaults alone unless the user asks:
+  they sit about 20% under what Claude Code's Read tool returns in one call.
+- **Version:** the commands in this skill work on xexport 0.2.0 and later. Size-based
+  pages, `full.html` and the page map need **0.3.0**; check with `xexport --version`
+  before telling the user those files exist.
 - **Native Codex children require xexport 0.2.2 or later.** Verify the executable
   version before using either child export path. In 0.2.0 even an exact child ID
   can be parsed as its parent; do not retry against production exports or use

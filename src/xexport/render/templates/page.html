@@ -1,11 +1,15 @@
 {% extends "base.html" %}
 {% import "macros.html" as m %}
-{% block title %}{{ session.title }} — page {{ number }}/{{ total_pages }}{% endblock %}
+{% block title %}{{ session.title }} — page {{ number }}{% endblock %}
 {% block content %}
-        <h1><a href="index.html" style="color: inherit; text-decoration: none;">{{ session.title }}</a> — page {{ number }}/{{ total_pages }}</h1>
-        {{ m.pagination(number, total_pages) }}
-        {% for view in messages %}
-{{ m.message(view) }}
-        {% endfor %}
-        {{ m.pagination(number, total_pages) }}
+        <h1><a href="index.html" style="color: inherit; text-decoration: none;">{{ session.title }}</a> — page {{ number }}</h1>
+        {{ m.nav('page', number, has_next) }}
+{% if continues %}
+        <p class="page-note">Continues prompt #{{ continues }} from <a href="{{ page_name(number - 1) }}">page {{ number - 1 }}</a>.</p>
+{% endif %}
+{% if oversize %}
+        <p class="page-note oversize">Oversize page: this one message is larger than the one-read page budget, so it has a page to itself and nothing was cut. Read it in slices.</p>
+{% endif %}
+{{ body }}
+        {{ m.nav('page', number, has_next) }}
 {% endblock %}

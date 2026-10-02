@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block title %}{{ session.title }} — full transcript{% endblock %}
+{% block content %}
+        <p class="full-banner">full.html: the complete transcript in one continuous file ({{ message_count }} messages, {{ total_pages }} page{{ 's' if total_pages != 1 }}, about {{ size_kb }} KB, about {{ size_tokens }} estimated tokens). It is for searching and skimming. On a large session it is too large to read whole with an agent file-read tool: search it, read a slice of it, or read the sized page-NNN.html files listed in <a href="index.html">index.html</a>. Message anchors (#msg-N) match the pages, and each page start is marked by an element with id="page-N".</p>
+        <h1><a href="index.html" style="color: inherit; text-decoration: none;">{{ session.title }}</a> — full transcript</h1>
+        {{ m.nav('full') }}
+{{ body }}
+        {{ m.nav('full') }}
+{% endblock %}

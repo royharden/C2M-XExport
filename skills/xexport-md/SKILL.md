@@ -112,7 +112,13 @@ down in `.chatexports\html\`, so this folder stays scannable.
 - `--brief` gives user + assistant text only (no tool calls or thinking).
 - `--full` disables truncation of long tool output.
 - `--name "Custom Name"` overrides the title part of the file name; collisions get " (2)".
-- Paginated HTML instead: use the sibling skill `xexport-html`.
+- HTML instead (an index, pages sized to fit one agent file read, and a single
+  `full.html`): use the sibling skill `xexport-html`. A long session's Markdown export is
+  one file of several thousand lines, more than an agent's file-read tool returns in one
+  call; the HTML pages are the format built for being read back.
+- Reading an export, yours or another agent's: use the sibling skill `xexport-read`.
+- **Version:** nothing in this skill needs xexport 0.3.0; that release changed the HTML
+  layout only, and the Markdown export is the same file as before.
 - **Native Codex children require xexport 0.2.2 or later.** Verify the executable
   version before using either child export path. In 0.2.0 even an exact child ID
   can be parsed as its parent; do not retry against production exports or use

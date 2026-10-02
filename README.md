@@ -3,7 +3,8 @@
 Export **Claude Code**, **Codex** (Codex CLI / ChatGPT desktop), **Cursor**
 Agent, and **Grok CLI** chat sessions to **paginated HTML** or **Markdown** transcripts — from
 inside the chat via the `xexport-html` / `xexport-md` skills, or from any
-terminal via the `xexport` CLI.
+terminal via the `xexport` CLI. HTML pages are cut by size, so each one is a single
+whole read for an agent's file-read tool.
 
 Exports land in `<project-root>\.chatexports` by default:
 
@@ -12,7 +13,12 @@ Exports land in `<project-root>\.chatexports` by default:
 ├── Claude_Opus5 -- Update xexport skills -- claude-a68ce6ac-...-d5b23c60437f.md
 ├── Claude_Sonnet5_Sub -- Summarize canonical skills -- claude-agent-a109fa34.md
 └── html\
-    └── Claude_Opus5 -- Update xexport skills -- claude-a68ce6ac-...\   <- index + page-NNN
+    └── Claude_Opus5 -- Update xexport skills -- claude-a68ce6ac-...\
+        ├── index.html                 <- page map, then one card per prompt
+        ├── page-001.html ...          <- full content, each sized for one read
+        ├── full.html                  <- everything in one file, for searching
+        ├── xexport.css, xexport.js    <- shared by the index and the pages
+        └── .xexport-cursor.json       <- what the export was made from
 ```
 
 Markdown sits at the root and HTML one level down in `html\`, so a folder full of HTML
@@ -68,11 +74,61 @@ Options:
 
 Output shapes:
 
-- `--format html` → `.chatexports\html\<name>\index.html` + `page-NNN.html`
-  (self-contained, works offline, client-side search)
+- `--format html` → `.chatexports\html\<name>\` holding `index.html`,
+  `page-NNN.html` and `full.html` (works offline; see "HTML layout" below)
 - `--format md` → `.chatexports\<name>.md`
 - `--format both` → both of the above, each in its own home. **Changed in 0.2.0:** the
   `.md` is no longer nested inside the HTML folder.
+
+## HTML layout
+
+An HTML export is built to be read back by an agent as well as by a person, and an
+agent's file-read tool returns only part of a large file. Claude Code's Read tool stops
+at whichever comes first of 2,000 lines, 25,000 tokens by its own count, or about
+256 KB, and the tokens run out first: on export HTML it counted 2.0 to 2.6 bytes per
+token, so 25,000 tokens is only 50 to 60 KB.
+
+- **`page-NNN.html`** holds the complete content: prompts, answers, thinking, tool
+  calls and tool results. A page closes before it reaches **20,000 estimated tokens,
+  1,500 lines or 200 KB**, whichever comes first, measured on the file as written.
+  Pages break between prompts when they can. A prompt too large for one page is split
+  between its messages, and each continuation page says which prompt it continues. A
+  single message larger than a page gets a page to itself, marked oversize. Nothing is
+  ever truncated or dropped to make a page fit.
+- **`index.html`** opens with a **page map**: for each page, its prompts, its message
+  anchors, its first timestamp, its lines, KB and estimated tokens, and a note (oversize,
+  continuation, a very long line). Below the map is one card per prompt, as before, each
+  linking to the page that holds it. On a long session the index is itself larger than
+  one read, which is why the map comes first.
+- **`full.html`** is every message in one file, with the same `#msg-N` anchors as the
+  pages and a marker (`id="page-N"`) where each page starts. It is for searching and
+  skimming. On a long session it is far too large for a model to read whole, and says so
+  in its first lines.
+- Past 999 pages the name simply grows (`page-1000.html`), so page order comes from the
+  page map, not from sorting file names.
+- The index and the pages share `xexport.css` and `xexport.js`; `full.html` carries its
+  own copy so that it still works when sent on its own.
+
+A page that already has a successor is never rewritten by a later refresh: appending
+turns changes the last page, `full.html` and the index, and adds pages. Links into
+earlier pages stay valid, and a synced folder re-uploads only what changed.
+
+The budget can be moved with `XEXPORT_PAGE_MAX_TOKENS`, `XEXPORT_PAGE_MAX_LINES` and
+`XEXPORT_PAGE_MAX_BYTES`. They are environment variables rather than flags on purpose:
+an unknown flag in a hook command is a usage error, and a usage error in a `Stop` hook
+blocks the turn. A value that is not a positive whole number is ignored.
+
+Tokens are estimated, not counted: no tokenizer ships with the CLI, and the one that
+matters cannot be run locally. The estimate weights each class of character and was
+calibrated against the counts Claude Code's Read tool reports;
+`scripts/validate_token_estimate.py` holds the calibration data and re-checks it. Other
+readers count differently, so the limits are a margin, not a guarantee.
+
+An export written by 0.2.3 or earlier (five prompts per page, no `full.html`) is
+re-laid-out in place the next time that session is exported.
+
+The `xexport-read` skill tells an agent how to read an export: which file to open
+first, how to find the page it needs, and how to slice a file that is too large.
 
 ## Keeping an export current
 
@@ -97,7 +153,9 @@ next refresh safe, and it is checked before anything is overwritten:
 - **Nothing changed** → "Up to date", and the file is not opened for writing at all, so
   its mtime does not move. Safe to run on every turn from a hook. Change detection is a
   digest over every message and block, so an edited turn is caught even when the message
-  count has not moved.
+  count has not moved. An HTML export also records the layout it was written in, and is
+  re-rendered when that differs from the current one even if the conversation has not
+  changed.
 - **The transcript is now shorter than the export** → refused. This is the one case a
   re-render would lose content, so the longer export is kept and the shorter one written
   beside it with a warning naming both.
@@ -123,6 +181,9 @@ is idempotent, so re-running it costs nothing.
 
 ## In-chat usage
 
+- Reading an export back, in any harness: the `xexport-read` skill.
+- Autosave for every session and subagent of a project: the `xexport-auto` skill, which
+  writes HTML by default.
 - **Claude Code** (CLI, desktop, VS Code): `/xexport-html` or `/xexport-md`
 - **Cursor** (Agent): `/xexport-html` or `/xexport-md` (uses `CURSOR_CONVERSATION_ID`)
 - **Codex** (CLI, ChatGPT desktop): `$xexport-html` or `$xexport-md` (Codex invokes
