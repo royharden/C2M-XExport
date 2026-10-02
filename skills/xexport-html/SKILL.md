@@ -125,10 +125,13 @@ should **read** an export, see the sibling skill `xexport-read`.
   user explicitly asks for that.
 - Markdown instead: use the sibling skill `xexport-md`.
 - Reading an export, yours or another agent's: use the sibling skill `xexport-read`.
-- The page budget can be changed for one run with the environment variables
+- The page budget can be changed with the environment variables
   `XEXPORT_PAGE_MAX_TOKENS`, `XEXPORT_PAGE_MAX_LINES` and `XEXPORT_PAGE_MAX_BYTES`.
   There are deliberately no flags for it. Leave the defaults alone unless the user asks:
-  they sit about 20% under what Claude Code's Read tool returns in one call.
+  they sit about 20% under what Claude Code's Read tool returns in one call. A changed
+  budget lasts only until the next refresh that does not set it (an autosave hook, for
+  instance), which re-cuts the pages to its own budget; to keep one, set it for every
+  process that exports the session.
 - **Version:** the commands in this skill work on xexport 0.2.0 and later. Size-based
   pages, `full.html` and the page map need **0.3.0**; check with `xexport --version`
   before telling the user those files exist.

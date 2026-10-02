@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% block preamble %}{% endblock %}
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -15,7 +16,7 @@
     <div class="container">
 {% block content %}{% endblock %}
         {% if session.inherited_session_ids %}<p class="footer">Inherited context: includes copied history from {% for sid in session.inherited_session_ids %}<code>{{ sid }}</code>{% if not loop.last %}, {% endif %}{% endfor %}; this is a full rollout snapshot, not solely this child's work.</p>{% endif %}
-        <footer class="footer">Exported by <a href="https://github.com/royharden/C2M-XExport">xexport</a> v{{ version }} from {{ session.app }} · session <code>{{ session.session_id }}</code>{% if session.parent_session_id %} · subagent of <code>{{ session.parent_session_id }}</code>{% endif %}{% if session.agent_path %} · agent path <code>{{ session.agent_path }}</code>{% endif %}{% if exported %} · {{ exported }}{% endif %} · style adapted from <a href="https://github.com/simonw/claude-code-transcripts">claude-code-transcripts</a></footer>
+        <footer class="footer">Exported by <a href="https://github.com/royharden/C2M-XExport">xexport</a>{% if version %} v{{ version }}{% endif %} from {{ session.app }} · session <code>{{ session.session_id }}</code>{% if session.parent_session_id %} · subagent of <code>{{ session.parent_session_id }}</code>{% endif %}{% if session.agent_path %} · agent path <code>{{ session.agent_path }}</code>{% endif %}{% if exported %} · {{ exported }}{% endif %} · style adapted from <a href="https://github.com/simonw/claude-code-transcripts">claude-code-transcripts</a></footer>
     </div>
 {% if inline_assets %}
     <script>

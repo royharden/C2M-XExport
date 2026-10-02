@@ -226,20 +226,21 @@ the *data*.
 HTML exports were paginated five prompts to a page. That is a count of prompts, and the
 thing pagination exists for is a property of the *file*: an agent that opens a page with
 a file-read tool gets only part of it once the file passes that tool's caps, and what it
-gets looks like a whole document. Claude Code's Read tool stops at whichever comes first
-of 2,000 lines, 25,000 tokens and about 256 KB. On one real 3.9 MB session, five-prompt
-pages came out at 94 KB, 114 KB, 242 KB and 398 KB (the last two 3,799 and 4,433 lines),
-and the index at 108 KB. Every one of them, the index included, was over the token cap.
-Nothing failed. The pages were simply never read to the end.
+gets looks like a whole document. Claude Code's Read tool returns the first part of a
+file over 25,000 tokens, and refuses one over about 256 KB. On one real 3.9 MB session,
+five-prompt pages came out at 94 KB, 114 KB, 242 KB and 398 KB (the last two 3,799 and
+4,433 lines), and the index at 108 KB. Every one of them, the index included, was over
+the token cap. The export itself reported nothing wrong: three of the pages and the
+index would be read in part, and the fourth page not at all.
 
 **Changed (0.3.0):** pages are packed by size, on the file as written, closing at 20,000
 estimated tokens, 1,500 lines or 200 KB, whichever comes first. Nothing is cut to fit:
 a prompt too big for a page is split between messages, and a single message too big for
 a page gets its own page and a flag. The index opens with a page map, because the index
 itself cannot be kept under the cap and a truncated read shows the top. `full.html`
-carries everything in one file for search. The same session is now 25 pages: 24 of
-6 to 47 KB, and one flagged oversize page holding a single 60 KB tool result. Each of the
-24 was read whole by the Read tool, with no partial-view notice.
+carries everything in one file for search. The same session is now 26 pages: 25 of
+6 to 42 KB, and one flagged oversize page holding a single 60 KB tool result. Each of the
+25 was read whole by the Read tool, with no partial-view notice.
 
 **The second half is the part that was nearly got wrong.** The budget is in tokens, and
 the plan was to estimate them as bytes / 3, validated against tiktoken, which measured
@@ -254,15 +255,29 @@ A flat ratio could not be rescued by picking a smaller number either. The same r
 counted 3.9 bytes per token on Russian prose, 2.75 on English, 1.5 on hex and
 escaped JSON, and 1.05 on base64, and a page of tool output is made of the last three.
 The estimate is therefore a weight per character class (letters, digits, spaces,
-newlines, other ASCII, non-ASCII bytes, with extra for emoji and for long unbroken runs),
-fitted to the Read tool's reported counts on thirteen synthetic classes and checked
-against 34 real pages: between 1% under and 24% over on the real pages, and never more
-than 10% under on any class. `scripts/validate_token_estimate.py` holds the data and the check, and a
-test pins the weights to it.
+newlines, other ASCII, non-ASCII bytes, with extra for emoji and for long unbroken
+runs) **and per run**, because what makes a hexdump or an id expensive is not its
+characters but that it is many short runs. The first calibration had only the
+per-character weights, fitted on thirteen classes, and looked finished: every real page
+within 1% under to 24% over. A reviewer then fed it hexdumps, short ids and random-case
+words, none of them among the thirteen, and it was 39% to 57% under. The weights are now
+the solution of a linear program over 25 synthetic classes and 34 real pages: the real
+pages come out 4% to 19% over, and no class more than 8% under, with one exception that
+is recorded rather than fixed. Words of random lowercase letters look exactly like prose
+to anything that is not a tokenizer, cost about three times as much, and are estimated
+at half their real count. `scripts/validate_token_estimate.py` holds the data and the
+check, and a test pins the weights to it.
 
-What could not be verified: any reader other than Claude Code's Read tool, on any model
-other than the one that ran the measurement (Claude Fable 5.1, 2026-10-02). Cursor's
-2,000-line default and Codex's shell-output limit are reported, not measured.
+The calibration classes are a sample, and the estimate is only as good as the sample is
+wide. When the next surprising page turns up, the fix is to add its class to that
+script and refit, not to turn a weight by hand.
+
+What could not be verified: any reader other than Claude Code's Read tool. The counts
+were taken on Claude Fable 5.1 on 2026-10-02, and a reviewer running Claude Opus 5.5
+was given identical counts for the same files; no other model was tried. Cursor's
+2,000-line default and Codex's shell-output limit are reported, not measured, and the
+Read tool's own documented 2,000-line default did not bind in testing (a 3,000-line
+file under the token cap was returned whole), so the line limit here is a precaution.
 
 **The general lesson:** when a limit is enforced by someone else's counter, measure with
 *that* counter, even if it can only be reached indirectly. A proxy that is convenient to

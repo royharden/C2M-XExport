@@ -30,7 +30,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, naming
+from . import __version__, naming, publish
 from .model import Session
 
 CURSOR_V = 1
@@ -176,9 +176,8 @@ def write_html_marker(folder: Path, data: dict) -> None:
     """Published the same way as the pages it describes, so a crash mid-write
     cannot leave a folder whose marker is truncated JSON -- which now reads as
     "unverifiable" and would cost a companion folder."""
-    (folder / HTML_CURSOR_NAME).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    publish.atomic_write_text(
+        folder / HTML_CURSOR_NAME, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 # --------------------------------------------------------------------- validation
@@ -242,6 +241,10 @@ def validate(data: dict, session: Session, *, opts: str = "",
 
     # Exact change detection: the digest covers every message and block, so an
     # edited or retried turn is caught even though the count did not move.
+    # Deliberately the last thing before "uptodate", after every refusal above. A
+    # layout mismatch is a reason to re-render and never a reason to overwrite:
+    # moved any higher, an old-layout export would be carried past the guard it
+    # sits above.
     if layout and str(data.get("layout") or "") != layout:
         return "ok", ""
     previous_digest = str(data.get("digest") or "")

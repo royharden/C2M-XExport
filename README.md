@@ -83,10 +83,11 @@ Output shapes:
 ## HTML layout
 
 An HTML export is built to be read back by an agent as well as by a person, and an
-agent's file-read tool returns only part of a large file. Claude Code's Read tool stops
-at whichever comes first of 2,000 lines, 25,000 tokens by its own count, or about
-256 KB, and the tokens run out first: on export HTML it counted 2.0 to 2.6 bytes per
-token, so 25,000 tokens is only 50 to 60 KB.
+agent's file-read tool does not return a large file whole. Claude Code's Read tool
+(observed 2026-10) returns only the first part of a file over 25,000 tokens by its own
+count, refuses a file over about 256 KB outright, and documents a default of 2,000
+lines. The tokens run out first: on export HTML it counted 2.0 to 2.6 bytes per token,
+so 25,000 tokens is only 50 to 65 KB.
 
 - **`page-NNN.html`** holds the complete content: prompts, answers, thinking, tool
   calls and tool results. A page closes before it reaches **20,000 estimated tokens,
@@ -103,7 +104,8 @@ token, so 25,000 tokens is only 50 to 60 KB.
 - **`full.html`** is every message in one file, with the same `#msg-N` anchors as the
   pages and a marker (`id="page-N"`) where each page starts. It is for searching and
   skimming. On a long session it is far too large for a model to read whole, and says so
-  in its first lines.
+  on its second line, ahead of everything else, and again in a banner at the top of the
+  page.
 - Past 999 pages the name simply grows (`page-1000.html`), so page order comes from the
   page map, not from sorting file names.
 - The index and the pages share `xexport.css` and `xexport.js`; `full.html` carries its
@@ -116,16 +118,30 @@ earlier pages stay valid, and a synced folder re-uploads only what changed.
 The budget can be moved with `XEXPORT_PAGE_MAX_TOKENS`, `XEXPORT_PAGE_MAX_LINES` and
 `XEXPORT_PAGE_MAX_BYTES`. They are environment variables rather than flags on purpose:
 an unknown flag in a hook command is a usage error, and a usage error in a `Stop` hook
-blocks the turn. A value that is not a positive whole number is ignored.
+blocks the turn. A value that is not a positive whole number is ignored. An export is
+re-laid-out whenever the budget it was written with differs from the budget of the run
+refreshing it, so set an override for every process that exports the session (the hook
+included), or each will undo the other's layout.
 
 Tokens are estimated, not counted: no tokenizer ships with the CLI, and the one that
-matters cannot be run locally. The estimate weights each class of character and was
-calibrated against the counts Claude Code's Read tool reports;
-`scripts/validate_token_estimate.py` holds the calibration data and re-checks it. Other
-readers count differently, so the limits are a margin, not a guarantee.
+matters cannot be run locally. The estimate weights each class of character and each
+run of letters or digits, and was calibrated against the counts Claude Code's Read tool
+reports on 25 kinds of content and 34 real pages;
+`scripts/validate_token_estimate.py` holds the calibration data and re-checks it. On
+the real pages it is 4% to 19% over. It can still be well under on content unlike
+anything it was calibrated on (strings of random lowercase letters are the known case),
+and other readers count differently, so the limits are a margin, not a guarantee.
+
+The title shown on a page is capped at 80 characters, and a page carries neither the
+xexport version nor the export time, so that retitling a chat or upgrading xexport
+never moves a page boundary.
 
 An export written by 0.2.3 or earlier (five prompts per page, no `full.html`) is
-re-laid-out in place the next time that session is exported.
+re-laid-out in place the next time that session is exported. The reverse is not clean:
+an older CLI refreshing a 0.3.0 export rewrites the index and pages in the old layout
+and leaves `full.html` behind, stale. Upgrade the installed CLI everywhere an export is
+refreshed. An index with no page map at its top marks a folder last written by an older
+version.
 
 The `xexport-read` skill tells an agent how to read an export: which file to open
 first, how to find the page it needs, and how to slice a file that is too large.

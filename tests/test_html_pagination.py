@@ -87,7 +87,8 @@ def _assert_within(out: Path) -> None:
         if _is_oversize(text):
             continue
         assert len(text.encode("utf-8")) <= limits.bytes, page.name
-        assert text.count("\n") + 1 <= limits.lines, page.name
+        assert text.endswith("</html>\n"), page.name
+        assert text.count("\n") <= limits.lines, page.name
         assert estimate_tokens(text) <= limits.tokens, page.name
 
 
@@ -117,6 +118,17 @@ class TestEachTriggerAlone:
         render_html(_session(30), tmp_path)
         assert len(_pages(tmp_path)) > 3
         _assert_within(tmp_path)
+
+    def test_no_page_is_over_at_any_limit_in_a_sweep(self, tmp_path, monkeypatch):
+        """what_bug_this_catches: accounting that is right at one limit and a few
+        bytes out at another -- the last page's disabled "Next" is longer than
+        the link the shell was measured with."""
+        s = _session(6)
+        for step, limit in enumerate(range(4200, 6200, 37)):
+            _limits(monkeypatch, nbytes=limit)
+            out = tmp_path / str(step)
+            render_html(s, out)
+            _assert_within(out)
 
     def test_default_budget_sits_under_the_reader_caps(self):
         """The defaults are the claim the whole layout makes; pin them."""
@@ -212,15 +224,84 @@ class TestPrefixStability:
         for page in closed:
             assert _read(page) == _read(after / page.name), page.name
 
-    def test_a_refresh_does_not_rewrite_an_unchanged_page(self, tmp_path, monkeypatch):
+    def test_a_new_title_never_moves_a_page_cut(self, tmp_path, monkeypatch):
+        """what_bug_this_catches: the title is on every page, so its length was
+        part of every page's budget. Chats are retitled while they run, and a
+        longer title moved the cuts: nine pages in ten then held different
+        messages, and every link into them pointed at the wrong page."""
+        _limits(monkeypatch, tokens=3000)
+        before, after = tmp_path / "before", tmp_path / "after"
+        s = _session(20, replies=2)
+        s.title = "A"
+        render_html(s, before)
+        s.title = "A much longer title, retitled mid-session: 日本語のタイトル & <more> " * 3
+        s.messages.append(_user("one more prompt"))
+        render_html(s, after)
+        closed = _pages(before)[:-1]
+        assert len(closed) >= 3
+        for page in closed:
+            assert _message_ids(_read(page)) == _message_ids(_read(after / page.name))
+        _assert_within(after)
+
+    def test_pages_do_not_carry_the_xexport_version(self, tmp_path):
+        """A version on every page would rewrite every page on every upgrade."""
+        from xexport import __version__
+        render_html(_session(3), tmp_path)
+        assert f"v{__version__}" not in _read(tmp_path / "page-001.html")
+        assert f"v{__version__}" in _read(tmp_path / "index.html")
+
+    def test_a_refresh_writes_what_changed_and_nothing_else(self, tmp_path,
+                                                            monkeypatch):
+        """Both directions: a page with a successor is not written again, and the
+        page that did change is. Skipping too much leaves stale pages on disk."""
         _limits(monkeypatch, tokens=3000)
         s = _session(20)
         render_html(s, tmp_path)
-        closed = _pages(tmp_path)[:-1]
-        stamps = {p.name: p.stat().st_mtime_ns for p in closed}
-        s.messages.append(_user("a new prompt"))
+        pages = [p.name for p in _pages(tmp_path)]
+        closed, last = pages[:-1], pages[-1]
+
+        written = []
+        real = html_mod.atomic_write_text
+
+        def recording(path, value):
+            written.append(Path(path).name)
+            real(path, value)
+
+        monkeypatch.setattr(html_mod, "atomic_write_text", recording)
+        s.messages.append(_assistant("GROWN-REPLY in the last group"))
         render_html(s, tmp_path)
-        assert {p.name: p.stat().st_mtime_ns for p in closed} == stamps
+        assert not set(written) & set(closed)
+        assert {"full.html", "index.html"} <= set(written)
+        assert "xexport.css" not in written and "xexport.js" not in written
+        new_pages = [n for n in written if n.startswith("page-")]
+        assert new_pages and all(n == last or n not in pages for n in new_pages)
+        holders = [p.name for p in _pages(tmp_path) if "GROWN-REPLY" in _read(p)]
+        assert len(holders) == 1 and holders[0] in new_pages
+        assert "GROWN-REPLY" in _read(tmp_path / "full.html")
+
+    def test_no_page_carries_the_export_time(self, tmp_path, monkeypatch):
+        """what_bug_this_catches: an export time on a page rewrites every page on
+        every refresh. Comparing two renders cannot see it unless the clock
+        happens to tick between them, so the clock is pinned instead."""
+        class Clock:
+            @staticmethod
+            def now():
+                return Clock()
+
+            def astimezone(self):
+                return self
+
+            def strftime(self, _format):
+                return "CLOCK-SENTINEL"
+
+        monkeypatch.setattr(html_mod, "datetime", Clock)
+        _limits(monkeypatch, tokens=3000)
+        render_html(_session(12), tmp_path)
+        assert "CLOCK-SENTINEL" in _read(tmp_path / "index.html")
+        assert "CLOCK-SENTINEL" in _read(tmp_path / "full.html")
+        assert len(_pages(tmp_path)) > 1
+        for page in _pages(tmp_path):
+            assert "CLOCK-SENTINEL" not in _read(page), page.name
 
 
 class TestManyPages:
@@ -232,7 +313,7 @@ class TestManyPages:
                 f.write(value)
         monkeypatch.setattr(html_mod, "atomic_write_text", plain)
         s = _session(prompts, reply="word " * 250)
-        _limits(monkeypatch, tokens=1500)
+        _limits(monkeypatch, nbytes=5000)
         render_html(s, tmp_path)
         return s
 
@@ -264,11 +345,15 @@ class TestManyPages:
         assert len(_pages(tmp_path)) == 5
 
     def test_path_budget_reserves_room_for_long_page_names(self, tmp_path):
-        """_path_budget assumed page-001.html. The name it reserves for must be at
-        least as long as any page name an export can produce."""
+        """_path_budget assumed page-001.html. What it reserves for must be at
+        least as long as the deepest path an export really writes, which is the
+        temporary file a late page is published through."""
         budget = cli._path_budget(tmp_path, 10_000)
-        deepest = len(str(tmp_path.resolve())) + 1 + budget + len("\\" + page_name(9_999_999))
-        assert deepest <= 260
+        temporary = "\\." + page_name(9_999_999) + ".XXXXXXXX.tmp"
+        deepest = len(str(tmp_path.resolve())) + 1 + budget + len(temporary)
+        assert deepest < 260
+        marker = "\\." + cursors.HTML_CURSOR_NAME + ".XXXXXXXX.tmp"
+        assert len(str(tmp_path.resolve())) + 1 + budget + len(marker) < 260
 
 
 class TestFullHtml:
@@ -301,6 +386,11 @@ class TestFullHtml:
         banner = full.index('class="full-banner"')
         assert banner < full.index("<h1>") < full.index('class="message ')
         assert "too large to read whole" in full[banner:banner + 900]
+        # And once more as the second line of the file, ahead of the inline
+        # stylesheet, which is where a `head` or a cut-short read looks.
+        second = full.split("\n")[1]
+        assert second.startswith("<!-- full.html:") and second.endswith("-->")
+        assert "too large to read whole" in second
 
     def test_full_stands_alone_and_pages_share_assets(self, tmp_path):
         render_html(_session(3), tmp_path)
@@ -352,7 +442,7 @@ class TestIndex:
             row = re.search(rf'<tr data-page="{number}">(.*?)</tr>', index).group(1)
             cells = re.findall(r"<td>(.*?)</td>", row)
             text = _read(page)
-            assert cells[4] == f"{text.count(chr(10)) + 1:,}"
+            assert cells[4] == f"{text.count(chr(10)):,}"
             assert cells[6] == f"{estimate_tokens(text):,}"
             ids = _message_ids(text)
             assert cells[2] == (f"{ids[0]}–{ids[-1]}" if len(ids) > 1 else str(ids[0]))
@@ -411,11 +501,33 @@ class TestIndex:
         s = _session(1, replies=40)
         s.messages.append(_user("second"))
         s.messages.append(_assistant("word " * 1200))
+        s.messages.append(_user("third"))
+        s.messages.append(_assistant("short"))
         render_html(s, tmp_path)
         index = _read(tmp_path / "index.html")
-        for number in re.findall(r'class="page-divider" id="page-(\d+)"', index):
-            text = _read(tmp_path / page_name(int(number)))
-            assert "Continues prompt" not in text
+        dividers = [int(n) for n in
+                    re.findall(r'class="page-divider" id="page-(\d+)"', index)]
+        opens_with_a_prompt = [
+            int(p.stem.split("-")[1]) for p in _pages(tmp_path)
+            if "Continues prompt" not in _read(p)]
+        assert dividers == opens_with_a_prompt
+        assert len(dividers) >= 2 and len(dividers) < len(_pages(tmp_path))
+        ids = re.findall(r'\bid="([^"]+)"', index)
+        assert len(ids) == len(set(ids))
+
+    def test_a_card_links_to_the_first_message_that_was_drawn(self, tmp_path):
+        """what_bug_this_catches: under --no-tools the first message of a group
+        can be emptied and never drawn. A card anchored on it links to an id
+        that is on no page."""
+        s = Session(source="claude", session_id="x", app="Claude Code", title="t")
+        s.messages = [_tool("metadata before the first prompt"),
+                      _user("the prompt"), _assistant("the answer")]
+        render_html(s, tmp_path, include_tools=False)
+        card = re.search(r'<div class="index-item"><a href="([^"#]+)#msg-(\d+)"',
+                         _read(tmp_path / "index.html"))
+        assert card.group(2) == "1"
+        assert 'id="msg-1"' in _read(tmp_path / card.group(1))
+        assert 'id="msg-0"' not in _read(tmp_path / card.group(1))
 
     def test_files_are_published_pages_then_full_then_index(
             self, tmp_path, monkeypatch):
@@ -449,9 +561,18 @@ class TestEstimator:
             "validate_token_estimate", REPO / "scripts" / "validate_token_estimate.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        checked = 0
         for name, text in module.synthetic().items():
+            if name in module.KNOWN_UNDERCOUNT:
+                continue
             real = module.READ_TOOL_TOKENS[name]
-            assert estimate_tokens(text) >= 0.9 * real, name
+            estimate = estimate_tokens(text)
+            assert estimate >= 0.9 * real, name
+            # And not wildly over: an estimate several times too high would pass
+            # the floor while cutting pages into slivers.
+            assert estimate <= 1.6 * real, name
+            checked += 1
+        assert checked >= 24
 
 
 # ------------------------------------------------------- upgrade through the CLI
@@ -464,6 +585,9 @@ def _export(out: Path, *extra):
                 "--out", str(out), *extra)
 
 
+OLD_PAGE = "OLD-LAYOUT-PAGE-SENTINEL"
+
+
 def _as_written_by_0_2_3(folder: Path) -> None:
     """Strip an export back to what 0.2.3 left on disk: no layout in the record,
     no full.html, no shared assets."""
@@ -474,6 +598,10 @@ def _as_written_by_0_2_3(folder: Path) -> None:
     marker.write_text(json.dumps(data), encoding="utf-8")
     for name in ("full.html", "xexport.css", "xexport.js"):
         (folder / name).unlink()
+    # 0.2.3 cut pages five prompts at a time, so its folder holds pages the new
+    # layout will not: content that must be replaced, and pages that must go.
+    for name in ("page-001.html", "page-002.html", "page-003.html"):
+        (folder / name).write_text(f"<html>{OLD_PAGE} {name}</html>", encoding="utf-8")
 
 
 class TestLayoutUpgrade:
@@ -493,6 +621,12 @@ class TestLayoutUpgrade:
         assert (folder / "full.html").is_file()
         assert cursors.read_html_marker(folder)["layout"] == layout_key()
         assert len(list((out / "html").iterdir())) == 1      # in place, no companion
+        # The old pages were re-rendered, and the ones the new layout has no use
+        # for are gone, rather than left beside the new ones.
+        assert [p.name for p in _pages(folder)] == ["page-001.html"]
+        for path in folder.glob("*.html"):
+            assert OLD_PAGE not in _read(path), path.name
+        assert "Second prompt" in _read(folder / "page-001.html")
 
     def test_up_to_date_is_still_a_no_op_afterwards(self, claude_store, tmp_path):
         out = tmp_path / "exports"
@@ -535,6 +669,45 @@ class TestLayoutUpgrade:
         assert _read(folder / "index.html") == before
         assert not (folder / "full.html").exists()
         assert len(list((out / "html").iterdir())) == 2
+
+    @pytest.mark.parametrize("case", ["shrink", "filters", "no-marker",
+                                      "corrupt-marker", "newer-marker"])
+    def test_no_guard_is_bypassed_by_the_upgrade(self, claude_store, tmp_path, case):
+        """what_bug_this_catches: the layout check in cursors.validate answers "ok,
+        re-render". Placed above any refusal, it would carry an old-layout export
+        straight past that refusal -- rewriting a full export as --brief, or
+        re-rendering over an export whose marker cannot be verified. Each guard is
+        exercised here on an export with no layout recorded, and run three times
+        so that a refusal which forks once per run is caught too."""
+        from conftest import _jsonl, claude_entries
+        out = tmp_path / "exports"
+        assert _export(out).exit_code == 0
+        folder = next((out / "html").iterdir())
+        _as_written_by_0_2_3(folder)
+        marker = folder / cursors.HTML_CURSOR_NAME
+        extra = []
+        if case == "shrink":
+            _jsonl(claude_store / "projects" / "C--proj" / f"{CLAUDE_SESSION_ID}.jsonl",
+                   claude_entries()[:3])
+        elif case == "filters":
+            extra = ["--brief"]
+        elif case == "no-marker":
+            marker.unlink()
+        elif case == "corrupt-marker":
+            marker.write_text('{"v": 1, "session_id": "', encoding="utf-8")
+        elif case == "newer-marker":
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            data["v"] = cursors.CURSOR_V + 1
+            marker.write_text(json.dumps(data), encoding="utf-8")
+        before = {p.name: _read(p) for p in folder.glob("*.html")}
+
+        for _ in range(3):
+            r = _export(out, "--mode", "append", *extra)
+            assert r.exit_code == 0, r.output
+
+        assert {p.name: _read(p) for p in folder.glob("*.html")} == before
+        assert not (folder / "full.html").exists()
+        assert len(list((out / "html").iterdir())) == 2      # one companion, once
 
     def test_markdown_records_carry_no_layout(self, claude_store, tmp_path):
         out = tmp_path / "exports"

@@ -13,6 +13,15 @@ CURSOR_SESSION_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 GROK_SESSION_ID = "01a00000-0000-7000-8000-000000000001"
 
 
+@pytest.fixture(autouse=True)
+def _default_page_budget(monkeypatch):
+    """The page budget can be overridden from the environment, so a developer's
+    shell must not be able to change what the tests see."""
+    for name in ("XEXPORT_PAGE_MAX_TOKENS", "XEXPORT_PAGE_MAX_LINES",
+                 "XEXPORT_PAGE_MAX_BYTES"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _jsonl(path: Path, entries: list[dict]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:

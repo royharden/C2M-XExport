@@ -118,11 +118,18 @@ Every part of that command line is load-bearing:
   (about a third of the tokens of the HTML pages on a tool-heavy session, because it
   cuts long tool output to 2,000 characters), so it is the one to add when a transcript
   is mostly wanted for a quick whole read.
-- **Version:** the recipe needs nothing newer than xexport 0.2.0 -- `--format html` has
+- **Version:** the recipe needs nothing newer than xexport 0.2.0. `--format html` has
   always existed, so it cannot be the unknown flag that loops a `Stop` hook. Size-based
   pages, `full.html` and the page map need **0.3.0**; an older CLI runs the same recipe
   and writes the older layout (five prompts per page, no `full.html`). After upgrading
   the CLI, existing HTML exports are re-laid-out the next time each session is exported.
+  Do not let two CLI versions refresh the same export: an older one rewrites the index
+  and pages and leaves the newer one's `full.html` behind, stale.
+- The page budget can be moved with `XEXPORT_PAGE_MAX_TOKENS`, `XEXPORT_PAGE_MAX_LINES`
+  and `XEXPORT_PAGE_MAX_BYTES`. If you set one, set it where the hook process sees it:
+  an export is re-laid-out whenever the budget it was written with differs from the
+  budget of the run refreshing it, so a hook and a hand-run export that disagree undo
+  each other's layout on every turn.
 
 ### Fidelity: these receipts are complete, not summaries
 
@@ -201,9 +208,11 @@ One parse of the session jsonl per turn, and, on a turn that changed something, 
 render of the HTML: every page, `full.html` and the index. Only the files whose content
 changed are rewritten, so earlier pages keep their modified time and a synced folder
 re-uploads the last page, `full.html` and the index rather than the whole export.
-Measured 2026-10-02 with 0.3.0 on the two largest transcripts on Roy's machine: 1.4 s
-for an 11.5 MB transcript (4,687 messages, 127 pages) and 1.0 s for a 10.7 MB one;
-0.7 s when nothing had changed, most of it process start-up. Measure it on the largest
+Measured 2026-10-02 with 0.3.0 on two large real transcripts: 2.2 s for an 11.5 MB
+one (4,687 messages, 125 pages) and 1.3 s for a 10.7 MB one; 0.6 to 0.9 s when nothing
+had changed, most of it process start-up. The first refresh after upgrading the CLI is
+the slow one, because it writes every page of the export afresh (several seconds for
+the 125-page one). Measure it on the largest
 real transcript in the project before installing this in a repo with very long sessions:
 
 ```bash

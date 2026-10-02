@@ -7,9 +7,10 @@ client-side expand/collapse, packed by *size* so that one page is one whole read
 for an agent's file-read tool. full.html: the same messages in one continuous file.
 
 Why size and not a prompt count: an agent that opens a page with a file-read tool
-is silently shown a partial view once the file passes that tool's caps (observed
-2026-10 for Claude Code: 2,000 lines, 25,000 tokens by its own count, about
-256 KB, whichever comes first). Five prompts can be 400 KB. See LESSONS.md.
+is shown only part of it, or none of it, once the file passes that tool's caps
+(observed 2026-10 for Claude Code: a partial view past 25,000 tokens by its own
+count, a refusal past about 256 KB, and a documented default of 2,000 lines).
+Five prompts can be 400 KB. See LESSONS.md.
 
 The index and the pages link one shared xexport.css and xexport.js rather than
 carrying them inline: inline, they were about a fifth of every page's budget, read
@@ -57,20 +58,33 @@ PAGE_MAX_BYTES = 200_000
 # Tokens are estimated, because a real tokenizer is a heavy dependency that
 # fetches vocabulary over the network, and the tokenizer that matters (the one
 # behind Claude Code's Read tool) cannot be run locally at all. The estimate is a
-# weight per character class, calibrated on 2026-10-02 against the token counts
-# that Read tool itself reports -- see scripts/validate_token_estimate.py, which
-# holds the calibration data, and LESSONS.md. A flat bytes-per-token ratio cannot
-# do this job: the same reader counted 3.9 bytes per token on Russian prose and
-# 1.05 on base64, and a page of tool output is much closer to the second.
-TOKENS_PER_LETTER = 0.38        # A-Z a-z
-TOKENS_PER_DIGIT = 0.8
-TOKENS_PER_SPACE = 0.12
-TOKENS_PER_NEWLINE = 1.6
-TOKENS_PER_OTHER_ASCII = 0.85   # punctuation, and the entities autoescape emits
-TOKENS_PER_NON_ASCII_BYTE = 0.45
-TOKENS_PER_ASTRAL_CHAR = 1.0    # added per 4-byte character: emoji
-TOKENS_PER_OPAQUE_CHAR = 0.62   # added per character of a long unbroken run
+# weight per character class and per run, calibrated on 2026-10-02 against the
+# token counts that Read tool itself reports -- see
+# scripts/validate_token_estimate.py, which holds the calibration data, and
+# LESSONS.md. A flat bytes-per-token ratio cannot do this job: the same reader
+# counted 3.9 bytes per token on Russian prose and 1.05 on base64, and a page of
+# tool output is much closer to the second. Nor can a weight per character alone:
+# what makes hexdumps, ids and random-case strings expensive is that they are
+# many short runs, so the runs are counted too.
+# The weights are the solution of a linear program: the smallest over-count of 34
+# real pages such that no real page is under-counted and no synthetic class is
+# more than 8% under. Changing one changes where pages are cut: bump HTML_LAYOUT
+# with it, or existing exports keep their old cuts until they next grow.
+TOKENS_PER_LETTER = 0.20        # A-Z a-z
+TOKENS_PER_LETTER_RUN = 0.35    # a word, or one hump of a camelCase name
+TOKENS_PER_SHORT_RUN = 1.42     # added per letter run of 1 or 2: "3f a2", "xQ"
+TOKENS_PER_LONG_LETTER = 1.41   # added per letter past the 8th of one run
+TOKENS_PER_DIGIT = 0.34
+TOKENS_PER_DIGIT_RUN = 0.52
+TOKENS_PER_SPACE = 0.40
+TOKENS_PER_NEWLINE = 2.0
+TOKENS_PER_OTHER_ASCII = 0.74   # punctuation, and the entities autoescape emits
+TOKENS_PER_NON_ASCII_BYTE = 0.36
+TOKENS_PER_ASTRAL_CHAR = 1.08   # added per 4-byte character: emoji
+TOKENS_PER_OPAQUE_CHAR = 0.20   # added per character of a long unbroken run
 _OPAQUE_RUN = re.compile(rb"[A-Za-z0-9]{20,}")   # hashes, base64, minified blobs
+_LETTER_RUN = re.compile(rb"[A-Z]?[a-z]+|[A-Z]+")
+_DIGIT_RUN = re.compile(rb"[0-9]+")
 _LETTERS = string.ascii_letters.encode("ascii")
 _DIGITS = string.digits.encode("ascii")
 _ASCII = bytes(range(0x80))
@@ -81,6 +95,14 @@ _BELOW_ASTRAL_LEAD = bytes(range(0xF0))
 # page (0.2.3 and earlier, recorded as no value at all). 2 = size-packed pages,
 # full.html, the page map and the shared stylesheet and script.
 HTML_LAYOUT = 2
+
+# A chat is retitled while it runs, and the title is on every page. So that a new
+# title can never move a page cut (and with it every link into the pages after
+# it), a page is budgeted as if its title cost this much, whatever it really is,
+# and the title shown on a page is capped to what that covers.
+PAGE_TITLE_CHARS = 80
+PAGE_TITLE_BYTES = 1_000
+PAGE_TITLE_TOKENS = 450
 
 _markdown = mistune.create_markdown(
     escape=True, plugins=["table", "strikethrough", "url"]
@@ -129,8 +151,10 @@ def layout_key() -> str:
 def token_weight(data: bytes) -> float:
     """Estimated tokens in UTF-8 `data`, as a float so that pieces add up.
 
-    A sum over characters, so the weight of a page is the weight of its shell plus
-    the weights of its messages, and packing never has to re-measure a page.
+    A sum over characters and runs, so the weight of a page is the weight of its
+    shell plus the weights of its messages, and packing never has to re-measure a
+    page. That holds as long as no run of letters or digits spans a join, which
+    is true of what is joined here: every piece starts and ends with markup.
     """
     size = len(data)
     letters = size - len(data.translate(None, _LETTERS))
@@ -141,7 +165,14 @@ def token_weight(data: bytes) -> float:
     astral = len(data.translate(None, _BELOW_ASTRAL_LEAD))
     other = size - letters - digits - spaces - newlines - non_ascii
     opaque = sum(len(run) for run in _OPAQUE_RUN.findall(data))
-    return (letters * TOKENS_PER_LETTER + digits * TOKENS_PER_DIGIT
+    run_lengths = [len(run) for run in _LETTER_RUN.findall(data)]
+    short_runs = sum(1 for n in run_lengths if n <= 2)
+    long_letters = sum(n - 8 for n in run_lengths if n > 8)
+    digit_runs = len(_DIGIT_RUN.findall(data))
+    return (letters * TOKENS_PER_LETTER + len(run_lengths) * TOKENS_PER_LETTER_RUN
+            + short_runs * TOKENS_PER_SHORT_RUN
+            + long_letters * TOKENS_PER_LONG_LETTER
+            + digits * TOKENS_PER_DIGIT + digit_runs * TOKENS_PER_DIGIT_RUN
             + spaces * TOKENS_PER_SPACE + newlines * TOKENS_PER_NEWLINE
             + other * TOKENS_PER_OTHER_ASCII
             + non_ascii * TOKENS_PER_NON_ASCII_BYTE
@@ -193,6 +224,9 @@ def _env() -> Environment:
         # are one of the three things a page is budgeted on.
         trim_blocks=True,
         lstrip_blocks=True,
+        # Files end with a newline, so `wc -l`, a read tool's line numbers and the
+        # page map all give the same count.
+        keep_trailing_newline=True,
     )
     env.filters["md"] = _md
     env.globals["tool_icon"] = _tool_icon
@@ -248,11 +282,15 @@ def _publish(path: Path, text: str) -> None:
     refresh. Rewriting it anyway would move its mtime each turn, and under
     OneDrive that is a re-upload of the whole export after every answer.
     """
+    data = text.encode("utf-8")
     try:
-        with open(path, encoding="utf-8", newline="") as f:
-            if f.read() == text:
-                return
-    except (OSError, UnicodeDecodeError):
+        # Size first: it settles most changed files without opening them, and
+        # opening a cloud-only file under OneDrive downloads it.
+        if path.stat().st_size == len(data):
+            with open(path, "rb") as f:
+                if f.read() == data:
+                    return
+    except OSError:
         pass
     atomic_write_text(path, text)
 
@@ -299,7 +337,7 @@ class _Page:
         count = len(fragments)
         total_bytes = (self.shell_bytes + self.body_bytes + count
                        + sum(f.nbytes for f in fragments))
-        total_lines = (self.shell_newlines + self.body_newlines + count + 1
+        total_lines = (self.shell_newlines + self.body_newlines + count
                        + sum(f.newlines for f in fragments))
         total_tokens = (self.shell_tokens + self.body_tokens
                         + count * TOKENS_PER_NEWLINE
@@ -421,16 +459,39 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
     # ---- pack
     page_tpl = env.get_template("page.html")
 
-    def render_page(page: _Page, *, has_next: bool, body: str = "") -> str:
-        # No export time and no page total on a page: both change on every
-        # refresh, and a page that already has a successor must stay
-        # byte-identical so links and refreshes are stable.
+    title = session.title or ""
+    if len(title) > PAGE_TITLE_CHARS:
+        title = title[:PAGE_TITLE_CHARS - 1] + "…"
+
+    def render_page(page: _Page, *, has_next: bool, body: str = "",
+                    page_title: str = title) -> str:
+        # No export time, no page total and no xexport version on a page: each
+        # changes without the conversation changing, and a page that already
+        # has a successor must stay byte-identical so links and refreshes are
+        # stable.
         return page_tpl.render(number=page.number, has_next=has_next,
                                continues=page.continues, oversize=page.oversize,
-                               body=Markup(body), exported="", **common)
+                               body=Markup(body), exported="", page_title=page_title,
+                               session=session, version="")
 
     def shell_size(number: int, continues: int) -> tuple[int, int, float]:
-        return _size(render_page(_Page(number, continues=continues), has_next=True))
+        # The larger of the two navigation states, so the last page (whose
+        # "Next" is a disabled span, a few bytes longer than the link) is
+        # covered too; and a fixed allowance in place of the real title.
+        # A shell differs from page to page only in the digits of the numbers
+        # it prints, and every digit weighs the same, so shells whose numbers
+        # have the same widths have the same size.
+        key = tuple(len(str(n)) for n in (number - 1, number, number + 1, continues))
+        if key not in shell_sizes:
+            blank = _Page(number, continues=continues)
+            sizes = [_size(render_page(blank, has_next=state, page_title=""))
+                     for state in (True, False)]
+            shell_sizes[key] = (max(s[0] for s in sizes) + PAGE_TITLE_BYTES,
+                                max(s[1] for s in sizes),
+                                max(s[2] for s in sizes) + PAGE_TITLE_TOKENS)
+        return shell_sizes[key]
+
+    shell_sizes: dict[tuple[int, ...], tuple[int, int, float]] = {}
 
     pages = _paginate(fragment_groups, limits, shell_size)
     total_pages = len(pages)
@@ -467,11 +528,9 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
             # Seconds are enough to place a page in time, and this row is paid
             # for once per page by every reader of the index.
             "ts": next((f.timestamp for f in page.fragments if f.timestamp), "")[:19],
-            "lines": _thousands(newlines + 1),
+            "lines": _thousands(newlines),
             "kb": _thousands(math.ceil(nbytes / 1000)),
             "tokens": _thousands(math.ceil(tokens)),
-            "oversize": page.oversize,
-            "continues": page.continues,
             "notes": "; ".join(note for note in (
                 "OVERSIZE: read in slices" if page.oversize else "",
                 f"continues #{page.continues}" if page.continues else "",
@@ -503,18 +562,26 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
     full_tpl = env.get_template("full.html")
     drawn_count = sum(len(page.fragments) for page in pages)
 
-    def render_full(nbytes: int, tokens: float) -> str:
+    def render_full(content: str, nbytes: int, tokens: float) -> str:
         return full_tpl.render(
-            body=Markup(body), total_pages=total_pages, message_count=drawn_count,
+            body=Markup(content), total_pages=total_pages,
+            message_count=drawn_count,
             size_kb=_thousands(math.ceil(nbytes / 1000)),
             size_tokens=_thousands(math.ceil(tokens)),
             inline_assets={"css": Markup(css), "js": Markup(js)},
             exported=exported, **common)
 
-    # The banner states the file's own size, so render once to learn it. The
-    # second render differs by a few digits, which "about" covers.
-    full_bytes, _, full_tokens = _size(render_full(0, 0.0))
-    atomic_write_text(out_dir / "full.html", render_full(full_bytes, full_tokens))
+    # The banner states the file's own size. That is the empty document plus
+    # the pieces, which were all measured when they were rendered; measuring
+    # the finished file again would be a second pass over megabytes. The
+    # figure is off by the page markers and its own digits, which "about"
+    # covers.
+    shell_bytes, _, shell_tokens = _size(render_full("", 0, 0.0))
+    drawn = [f for page in pages for f in page.fragments]
+    full_bytes = shell_bytes + sum(f.nbytes + 1 for f in drawn)
+    full_tokens = shell_tokens + sum(f.tokens + TOKENS_PER_NEWLINE for f in drawn)
+    atomic_write_text(out_dir / "full.html",
+                      render_full(body, full_bytes, full_tokens))
 
     # ---- index, last: it must never point at a file that is not there yet
     index_items = []
@@ -531,7 +598,9 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
         long_text = _group_long_text(group)
         index_items.append({
             "number": prompt_number,
-            "href": f"{page_name(first_page)}#msg-{first}",
+            # A group a filter emptied entirely has no message to land on, so
+            # its card links to the page and names no anchor.
+            "href": page_name(first_page) + (f"#msg-{first}" if drawn else ""),
             "page": first_page,
             # Only where the page really opens with this prompt. A page that
             # opens mid-prompt is shown by the badge of the prompt it continues.

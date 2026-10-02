@@ -478,9 +478,11 @@ def _path_budget(html_dir: Path, fallback: int) -> int:
     # longer, and with --json the raw sidecar is longer still. Reserving only the
     # page let render_html succeed and then write_html_marker raise, leaving a
     # folder with no marker -- which the next run cannot verify.
-    # Page names grow past 999 (page-1000.html), so reserve a seven-digit page
-    # rather than assume three; full.html and index.html are shorter than both.
-    deepest = max(len("\\page-0000000.html"), len("\\.xexport-cursor.json"))
+    # Longer than both is the temporary file a page is written through before it
+    # is renamed into place (publish.atomic_write_text: ".<name>.<8 chars>.tmp"),
+    # and page names grow past 999, so reserve that for a seven-digit page.
+    deepest = max(len("\\.page-0000000.html.XXXXXXXX.tmp"),
+                  len("\\..xexport-cursor.json.XXXXXXXX.tmp"))
     budget = 260 - base - deepest - 1
     return max(40, min(fallback, budget))
 
