@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -710,6 +711,29 @@ class TestFirstExportCrash:
         assert r.exit_code != 0
         assert "cannot be used" in r.output
         assert taken.is_dir()                       # not ours, not removed
+
+    def test_a_folder_written_beside_an_unusable_name_is_adopted_next_time(
+            self, claude_store, tmp_path):
+        """what_bug_this_catches: the companion written when the canonical name
+        was taken (here by a stray file; a broken link does the same) was not
+        marked forked, so no later run adopted it and every append wrote
+        another numbered folder -- one per turn under a Stop hook."""
+        out = tmp_path / "exports"
+        assert _export(out).exit_code == 0
+        folder = next((out / "html").iterdir())
+        canonical = folder.name
+        shutil.rmtree(folder)
+        (out / "html" / canonical).write_text("in the way", encoding="utf-8")
+
+        r = _export(out, "--mode", "append")
+        assert r.exit_code == 0 and "could not be refreshed" in r.output
+        for _ in range(3):
+            r = _export(out, "--mode", "append")
+            assert r.exit_code == 0, r.output
+        assert "Up to date" in r.output
+        entries = sorted(p.name for p in (out / "html").iterdir())
+        assert entries == [canonical, f"{canonical} (2)"]
+        assert cursors.read_html_marker(out / "html" / f"{canonical} (2)")["forked"] is True
 
     def test_unique_path_sees_a_dangling_link(self, tmp_path):
         from xexport.titles import unique_path

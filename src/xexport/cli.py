@@ -468,14 +468,19 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
         raise click.ClickException(
             f"could not create a folder for this export under {html_dir}: "
             f"{folder.name} exists but cannot be used")
-    if opt.mode != "new" and not refused and folder.name != name:
+    displaced = opt.mode != "new" and folder.name != name
+    if displaced and not refused:
         _warn(f"Warning: {name}\\ already exists but could not be refreshed; "
               f"wrote {folder.name}\\ instead.")
     try:
         index_path = render_html(session, folder, **opt.html_kwargs)
+        # A numbered folder written because the canonical name was taken is a
+        # companion whichever way it was taken (a refusal, an unmarked
+        # leftover, a broken link). Marked forked, the next run adopts it;
+        # unmarked, the next run writes another, once per turn.
         cursors.write_html_marker(folder, cursors.make(
             session, messages=total, run=1, opts=opt.html_opts_fingerprint,
-            forked=refused, layout=layout_key()))
+            forked=refused or displaced, layout=layout_key()))
     except BaseException:
         # This run created this folder. Left half-written and without its
         # marker, it can never be verified, so the next run would fail closed
