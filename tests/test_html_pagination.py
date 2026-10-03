@@ -694,6 +694,36 @@ class TestFirstExportCrash:
         assert _export(out).exit_code == 0
         assert len(list((out / "html").iterdir())) == 2
 
+    def test_a_name_that_cannot_be_created_fails_instead_of_hanging(
+            self, claude_store, tmp_path, monkeypatch):
+        """what_bug_this_catches: claiming the folder retried unique_path until
+        mkdir succeeded. A dangling junction at the chosen name is reported as
+        not existing and cannot be created, so the retry never ended -- inside a
+        Stop hook, a hung turn. unique_path now sees such a name (lexists) and
+        the retry is bounded; this pins the bound with a name that is always
+        taken."""
+        out = tmp_path / "exports"
+        taken = out / "html" / "taken"
+        taken.mkdir(parents=True)
+        monkeypatch.setattr(cli, "unique_path", lambda directory, name, suffix="": taken)
+        r = _export(out)
+        assert r.exit_code != 0
+        assert "cannot be used" in r.output
+        assert taken.is_dir()                       # not ours, not removed
+
+    def test_unique_path_sees_a_dangling_link(self, tmp_path):
+        from xexport.titles import unique_path
+        target = tmp_path / "gone"
+        target.mkdir()
+        link = tmp_path / "name"
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks need a privilege this account lacks")
+        target.rmdir()                               # now dangling
+        assert not link.exists()
+        assert unique_path(tmp_path, "name").name == "name (2)"
+
     def test_a_ctrl_c_during_a_first_export_cleans_up_too(self, claude_store,
                                                           tmp_path, monkeypatch):
         def interrupted(session, folder, **kwargs):

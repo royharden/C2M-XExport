@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -34,7 +35,10 @@ def unique_path(directory: Path, name: str, suffix: str = "") -> Path:
     """Return directory/name+suffix, appending " (2)", " (3)"… on collision."""
     candidate = directory / f"{name}{suffix}"
     n = 2
-    while candidate.exists():
+    # lexists, not exists: a dangling junction or symlink is a name that is
+    # taken even though nothing is behind it, and a caller that then tries to
+    # create it would be told so forever.
+    while os.path.lexists(candidate):
         candidate = directory / f"{name} ({n}){suffix}"
         n += 1
     return candidate

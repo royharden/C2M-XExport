@@ -450,7 +450,7 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
             return index_path, "updated", f"{total} messages, refresh {run}"
 
     html_dir.mkdir(parents=True, exist_ok=True)
-    while True:
+    for attempt in range(20):
         folder = unique_path(html_dir, name)
         try:
             # Claim the folder by creating it, so that the clean-up below can
@@ -461,6 +461,13 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
             break
         except FileExistsError:
             continue
+    else:
+        # Bounded, because this runs inside a Stop hook: a name that can be
+        # neither found nor created (a broken link, a race that never settles)
+        # must fail the export, not hang the turn.
+        raise click.ClickException(
+            f"could not create a folder for this export under {html_dir}: "
+            f"{folder.name} exists but cannot be used")
     if opt.mode != "new" and not refused and folder.name != name:
         _warn(f"Warning: {name}\\ already exists but could not be refreshed; "
               f"wrote {folder.name}\\ instead.")
