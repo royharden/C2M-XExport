@@ -1,4 +1,4 @@
-"""Render a Session to HTML: index.html + page-NNN.html + full.html.
+"""Render a Session to HTML: index.html + page-NNN.html + full.html + pages.json.
 
 Layout and styling adapted from claude-code-transcripts by Simon Willison
 (Apache-2.0) — see NOTICE. Index page: a page map, then one card per user prompt
@@ -21,6 +21,7 @@ file meant to be passed around on its own still stands on its own.
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
 import re
@@ -49,9 +50,12 @@ LONG_LINE_CHARS = 2_000
 
 # ------------------------------------------------------------------ page budget
 # A page closes at whichever of these is reached first, measured on the file as it
-# is written (boilerplate and navigation included). Each sits about 20% under the
-# reader cap it protects: 25,000 tokens, 2,000 lines, 256 KB.
-PAGE_MAX_TOKENS = 20_000
+# is written (boilerplate and navigation included). Each sits under the reader cap
+# it protects: 25,000 tokens, 2,000 lines, 256 KB. Tokens get the widest margin
+# (about a third) because they are estimated, and because the reader's count is
+# not under xexport's control: Roy's choice, 2026-10-02, trading about 15% more
+# pages for pages that stay whole when the estimate is 20% out.
+PAGE_MAX_TOKENS = 17_000
 PAGE_MAX_LINES = 1_500
 PAGE_MAX_BYTES = 200_000
 
@@ -99,8 +103,9 @@ _BELOW_ASTRAL_LEAD = bytes(range(0xF0))
 # Bumped when the files an export folder holds, or how they are cut, change in a
 # way an existing export should be re-rendered to pick up. 1 = five prompts per
 # page (0.2.3 and earlier, recorded as no value at all). 2 = size-packed pages,
-# full.html, the page map and the shared stylesheet and script.
-HTML_LAYOUT = 2
+# full.html, the page map and the shared stylesheet and script (0.3.0). 3 =
+# pages.json and the 17,000-token budget (0.3.1).
+HTML_LAYOUT = 3
 
 # A chat is retitled while it runs, and the title is on every page. So that a new
 # title can never move a page cut (and with it every link into the pages after
@@ -520,6 +525,7 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
     page_of_anchor: dict[int, int] = {}
     page_opens_with: dict[int, int] = {}    # page number -> its first drawn anchor
     page_map = []
+    records = []
     for page in pages:
         for a in page.anchors:
             page_of_anchor[a] = page.number
@@ -531,6 +537,19 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
         nbytes, newlines, tokens = _size(html)
         longest = max(len(line) for line in html.split("\n"))
         drawn = [f.anchor for f in page.fragments]
+        records.append({
+            "page": page.number,
+            "file": page_name(page.number),
+            "prompts": [page.prompts[0], page.prompts[-1]] if page.prompts else None,
+            "messages": [drawn[0], drawn[-1]] if drawn else None,
+            "first": next((f.timestamp for f in page.fragments if f.timestamp), None),
+            "lines": newlines,
+            "bytes": nbytes,
+            "tokens": math.ceil(tokens),
+            "longest": longest,
+            "oversize": page.oversize,
+            "continues": page.continues or None,
+        })
         page_map.append({
             "number": page.number,
             "href": page_name(page.number),
@@ -594,6 +613,31 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
     full_tokens = shell_tokens + sum(f.tokens + TOKENS_PER_NEWLINE for f in drawn)
     atomic_write_text(out_dir / "full.html",
                       render_full(body, full_bytes, full_tokens))
+
+    # ---- pages.json: the page map as data, one page per line
+    # The index of a long session is more than one read, so the map it opens
+    # with has to be fetched by range or search. This file is the same map,
+    # small enough to read whole at any session length and parsed rather than
+    # scraped. One line per page keeps it greppable too.
+    manifest = {
+        "layout": HTML_LAYOUT,
+        "xexport": __version__,
+        "budget": {"tokens": limits.tokens, "lines": limits.lines,
+                   "bytes": limits.bytes},
+        "source": session.source,
+        "session_id": session.session_id,
+        "title": session.title,
+        "pages": total_pages,
+        "prompts": len(groups),
+        "messages": drawn_count,
+        "oversize_pages": [r["page"] for r in records if r["oversize"]],
+        "files": {"index": "index.html", "full": "full.html"},
+    }
+    head = json.dumps(manifest, ensure_ascii=False, indent=1)
+    rows = ",\n".join("  " + json.dumps(r, ensure_ascii=False, separators=(",", ":"))
+                      for r in records)
+    _publish(out_dir / "pages.json",
+             head[:-2] + ',\n "page_map": [\n' + rows + "\n ]\n}\n")
 
     # ---- index, last: it must never point at a file that is not there yet
     index_items = []

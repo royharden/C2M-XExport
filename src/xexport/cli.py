@@ -454,10 +454,19 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
     if opt.mode != "new" and not refused and folder.name != name:
         _warn(f"Warning: {name}\\ already exists but could not be refreshed; "
               f"wrote {folder.name}\\ instead.")
-    index_path = render_html(session, folder, **opt.html_kwargs)
-    cursors.write_html_marker(folder, cursors.make(
-        session, messages=total, run=1, opts=opt.html_opts_fingerprint,
-        forked=refused, layout=layout_key()))
+    try:
+        index_path = render_html(session, folder, **opt.html_kwargs)
+        cursors.write_html_marker(folder, cursors.make(
+            session, messages=total, run=1, opts=opt.html_opts_fingerprint,
+            forked=refused, layout=layout_key()))
+    except BaseException:
+        # This folder did not exist before this run. Left half-written and
+        # without its marker, it can never be verified, so the next run would
+        # fail closed and write a companion beside it, for good. Remove what
+        # this run made and let the next run start clean. A refresh is not
+        # treated this way: its folder holds an export worth keeping.
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
     return index_path, "wrote", ""
 
 

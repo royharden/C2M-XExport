@@ -109,8 +109,9 @@ Every part of that command line is load-bearing:
   never `Warning:` — a fork always stays visible.
 - **`--format html`** writes a folder per session at `.chatexports\html\<name>\`:
   `index.html` (a page map, then one card per prompt), `page-NNN.html` (the full
-  content, each page sized to fit one read by an agent's file-read tool) and
-  `full.html` (everything in one file, for searching). It is the default since
+  content, each page sized to fit one read by an agent's file-read tool), `full.html`
+  (everything in one file, for searching) and `pages.json` (the page map as data, one
+  page per line; 0.3.1 and later). It is the default since
   2026-10 because the Markdown export is one file that outgrows a single read on any
   long session. How to read what the hook writes is the sibling skill `xexport-read`.
 - Want Markdown too: add `--format both`. The HTML stays at `.chatexports\html\<name>\`
@@ -120,7 +121,8 @@ Every part of that command line is load-bearing:
   is mostly wanted for a quick whole read.
 - **Version:** the recipe needs nothing newer than xexport 0.2.0. `--format html` has
   always existed, so it cannot be the unknown flag that loops a `Stop` hook. Size-based
-  pages, `full.html` and the page map need **0.3.0**; an older CLI runs the same recipe
+  pages, `full.html` and the page map need **0.3.0** (`pages.json` **0.3.1**); an older
+  CLI runs the same recipe
   and writes the older layout (five prompts per page, no `full.html`). After upgrading
   the CLI, existing HTML exports are re-laid-out the next time each session is exported.
   Do not let two CLI versions refresh the same export: an older one rewrites the index

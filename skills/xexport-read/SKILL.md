@@ -30,6 +30,7 @@ are there.
         ├── index.html              start here
         ├── page-001.html ...       the conversation, in pieces sized for one read
         ├── full.html               the whole conversation in one file
+        ├── pages.json              the page map as data, one page per line
         ├── xexport.css, xexport.js styling for a browser; nothing to read
         └── .xexport-cursor.json    xexport's own record; do not read or edit
 ```
@@ -44,13 +45,14 @@ same conversation.
 | `index.html` | A page map, then one card per user prompt (the prompt, tool counts, the closing answer). | Take the page map from its top. Do not try to read it whole on a long session. |
 | `page-NNN.html` | The complete content of a run of messages: prompts, answers, thinking, tool calls, tool results. | Read whole. Each is sized to fit one read. |
 | `full.html` | Every message of every page in one continuous file. | Search it. Do not read it whole. |
+| `pages.json` | The page map as data (xexport 0.3.1 and later): a header, then one JSON object per page on its own line. | Read it whole; it is small at any session length. |
 | `<name>.md` | The whole conversation as one Markdown file. Long tool output is cut to 2,000 characters unless it was exported with `--full`. | Fine to read whole when small; slice it when large. |
 
 ### The sizing contract (xexport 0.3.0 and later)
 
-- A `page-NNN.html` closes before it reaches **20,000 estimated tokens, 1,500 lines or
-  200 KB**, whichever comes first, measured on the file as written. In practice the
-  token limit decides, and a full page is 25 to 40 KB.
+- A `page-NNN.html` closes before it reaches **17,000 estimated tokens, 1,500 lines or
+  200 KB**, whichever comes first, measured on the file as written (20,000 tokens in
+  0.3.0). In practice the token limit decides, and a full page is 20 to 40 KB.
 - A page that could not be made to fit is marked. It holds exactly one message that is
   larger than a page, it says "Oversize page" at its top, and its row in the page map
   says `OVERSIZE: read in slices`. Nothing is ever truncated to make a page fit.
@@ -76,13 +78,17 @@ the folder.
 
 ## Reading an HTML export
 
-1. **Take the page map.** It is a table near the top of `index.html`, starting around
-   line 14, one line per page: the file name, the prompts it covers (`#4–#6`), the
-   message anchors it holds (`57–80`), its first timestamp, its lines, KB and estimated
-   tokens, and a note. Get it with a **ranged** read (the first 150 lines; continue
-   until you pass `</table>`), or by searching `index.html` for `<tr data-page=`.
-   A whole-file read of a long session's index is refused or cut short; the cards below
-   the map are a summary you can do without.
+1. **Take the page map.** If the folder has `pages.json`, read that whole: a header
+   (budget, counts, `oversize_pages`) and then one object per page on its own line with
+   `file`, `prompts` (first and last prompt number), `messages` (first and last `#msg-N`
+   anchor), `first` (timestamp), `lines`, `bytes`, `tokens`, `longest` (line length),
+   `oversize` and `continues` (the prompt it continues, or null). A Grep for
+   `"page":7,` returns just page 7's row.
+   Without `pages.json`, the same map is a table near the top of `index.html`,
+   starting around line 14, one line per page. Get it with a **ranged** read (the first
+   150 lines; continue until you pass `</table>`), or by searching `index.html` for
+   `<tr data-page=`. A whole-file read of a long session's index is refused or cut
+   short; the cards below the map are a summary you can do without.
 2. **Decide which pages you need** (next section), then read each of those whole.
 3. **Read the whole export only when the task needs all of it**, and then page by page
    in order, not through `full.html`.
@@ -91,7 +97,7 @@ the folder.
 
 | You have | Do this |
 |---|---|
-| A prompt number (`#12`, or "the third thing the user asked") | Page map, "Prompts" column. The index card for that prompt also links straight to its first message, and its badge says which pages the prompt spans. |
+| A prompt number (`#12`, or "the third thing the user asked") | Page map, `prompts` field or "Prompts" column. The index card for that prompt also links straight to its first message, and its badge says which pages the prompt spans. |
 | A keyword, file name, error text | Search `page-*.html` in the export folder for it, listing matching files only. Then read those pages. Searching `full.html` instead gives line numbers in one file; the nearest `id="page-N"` marker above a hit tells you the page. |
 | A time | Page map, "First timestamp" column (ISO 8601, as recorded by the source app, normally UTC). The page you want is the last one whose first timestamp is not after your time. |
 | An anchor `#msg-N` | Page map, "#msg-N" column gives the range each page holds. Or search the folder for `id="msg-N"`. |

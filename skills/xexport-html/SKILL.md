@@ -17,13 +17,15 @@ level makes the Markdown files hard to find.
 | File | What it is |
 |---|---|
 | `index.html` | A page map at the top (each page's prompts, message anchors, first timestamp, lines, KB, estimated tokens), then one card per prompt. |
-| `page-NNN.html` | The complete content, cut by size so that one page is one whole read for an agent's file-read tool: at most 20,000 estimated tokens, 1,500 lines or 200 KB. Nothing is truncated; a single message larger than a page gets its own page, marked oversize. |
+| `page-NNN.html` | The complete content, cut by size so that one page is one whole read for an agent's file-read tool: at most 17,000 estimated tokens, 1,500 lines or 200 KB. Nothing is truncated; a single message larger than a page gets its own page, marked oversize. |
 | `full.html` | Every message in one file, with the same `#msg-N` anchors. For searching and skimming; too large to read whole on a long session. |
+| `pages.json` | The page map as data: a header, then one JSON object per page on its own line. Small at any session length (0.3.1 and later). |
 | `xexport.css`, `xexport.js` | Styling shared by the index and the pages. `full.html` carries its own copy, so it can be sent on its own. |
 | `.xexport-cursor.json` | xexport's record of what the export was made from. Leave it alone. |
 
 Earlier versions (0.2.3 and before) wrote five prompts per page whatever their size and
-no `full.html`. Refreshing such an export with 0.3.0 re-lays it out in place. When you
+no `full.html`; 0.3.0 had no `pages.json`. Refreshing such an export with the current
+version re-lays it out in place. When you
 tell the user where the export is, give the path to `index.html`. For how an agent
 should **read** an export, see the sibling skill `xexport-read`.
 
@@ -133,8 +135,8 @@ should **read** an export, see the sibling skill `xexport-read`.
   instance), which re-cuts the pages to its own budget; to keep one, set it for every
   process that exports the session.
 - **Version:** the commands in this skill work on xexport 0.2.0 and later. Size-based
-  pages, `full.html` and the page map need **0.3.0**; check with `xexport --version`
-  before telling the user those files exist.
+  pages, `full.html` and the page map need **0.3.0**, `pages.json` needs **0.3.1**;
+  check with `xexport --version` before telling the user those files exist.
 - **Native Codex children require xexport 0.2.2 or later.** Verify the executable
   version before using either child export path. In 0.2.0 even an exact child ID
   can be parsed as its parent; do not retry against production exports or use

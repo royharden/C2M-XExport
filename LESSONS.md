@@ -273,8 +273,10 @@ tokenizer, cost about three times as much, and are estimated at about 60% of the
 real count. A page made mostly of them is over the cap and is not flagged. `scripts/validate_token_estimate.py` holds the data and the
 check, and a test pins the weights to it.
 
-The calibration classes are a sample, and the estimate is only as good as the sample is
-wide. When the next surprising page turns up, the fix is to add its class to that
+After the second refit the owner chose to spend about 15% more pages on margin: the
+token budget is 17,000, a third under the cap, so a page stays whole even where the
+estimate is 20% out. The calibration classes are a sample, and the estimate is only as
+good as the sample is wide. When the next surprising page turns up, the fix is to add its class to that
 script and refit, not to turn a weight by hand.
 
 What could not be verified: any reader other than Claude Code's Read tool. The counts

@@ -17,6 +17,7 @@ Exports land in `<project-root>\.chatexports` by default:
         ├── index.html                 <- page map, then one card per prompt
         ├── page-001.html ...          <- full content, each sized for one read
         ├── full.html                  <- everything in one file, for searching
+        ├── pages.json                 <- the page map as data, one page per line
         ├── xexport.css, xexport.js    <- shared by the index and the pages
         └── .xexport-cursor.json       <- what the export was made from
 ```
@@ -90,8 +91,9 @@ lines. The tokens run out first: on export HTML it counted 2.0 to 2.6 bytes per 
 so 25,000 tokens is only 50 to 65 KB.
 
 - **`page-NNN.html`** holds the complete content: prompts, answers, thinking, tool
-  calls and tool results. A page closes before it reaches **20,000 estimated tokens,
-  1,500 lines or 200 KB**, whichever comes first, measured on the file as written.
+  calls and tool results. A page closes before it reaches **17,000 estimated tokens,
+  1,500 lines or 200 KB**, whichever comes first, measured on the file as written. The
+  token budget sits a third under the reader's cap because it is an estimate (below).
   Pages break between prompts when they can. A prompt too large for one page is split
   between its messages, and each continuation page says which prompt it continues. A
   single message larger than a page gets a page to itself, marked oversize. Nothing is
@@ -106,6 +108,13 @@ so 25,000 tokens is only 50 to 65 KB.
   skimming. On a long session it is far too large for a model to read whole, and says so
   on its second line, ahead of everything else, and again in a banner at the top of the
   page.
+- **`pages.json`** is the page map as data: a short header (layout, version, budget,
+  session, counts, which pages are oversize) and one JSON object per page on its own
+  line (`{"page":7,"file":"page-007.html","prompts":[10,11],"messages":[72,83],
+  "first":"…","lines":316,"bytes":37229,"tokens":18709,"longest":1062,"oversize":false,
+  "continues":null}`). About 200 bytes a page, so it is one read for any session up to
+  a few hundred pages, and it can be parsed instead of scraped. The index holds the same
+  map as a table for people.
 - Past 999 pages the name simply grows (`page-1000.html`), so page order comes from the
   page map, not from sorting file names.
 - The index and the pages share `xexport.css` and `xexport.js`; `full.html` carries its
@@ -141,12 +150,18 @@ The title shown on a page is capped at 80 characters, and a page carries neither
 xexport version nor the export time, so that retitling a chat or upgrading xexport
 never moves a page boundary.
 
-An export written by 0.2.3 or earlier (five prompts per page, no `full.html`) is
-re-laid-out in place the next time that session is exported. The reverse is not clean:
+An export written by an earlier version is re-laid-out in place the next time that
+session is exported: 0.2.3 and before had five prompts per page and no `full.html`;
+0.3.0 had a 20,000-token budget and no `pages.json`. The reverse is not clean:
 an older CLI refreshing a 0.3.0 export rewrites the index and pages in the old layout
 and leaves `full.html` behind, stale. Upgrade the installed CLI everywhere an export is
 refreshed. An index with no page map at its top marks a folder last written by an older
 version.
+
+Markdown images in a prompt, answer or thinking block are rendered as images, so
+opening an export loads them from their URLs, which tells whoever hosts one that the
+export was opened. That is a deliberate choice (2026-10-02): the transcripts are the
+owner's own, and seeing the image was preferred to a placeholder.
 
 The `xexport-read` skill tells an agent how to read an export: which file to open
 first, how to find the page it needs, and how to slice a file that is too large.

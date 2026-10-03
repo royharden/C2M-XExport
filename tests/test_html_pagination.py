@@ -149,7 +149,7 @@ class TestEachTriggerAlone:
 
     def test_default_budget_sits_under_the_reader_caps(self):
         """The defaults are the claim the whole layout makes; pin them."""
-        assert html_mod.PAGE_MAX_TOKENS <= 20_000 < 25_000
+        assert html_mod.PAGE_MAX_TOKENS <= 17_000 < 25_000
         assert html_mod.PAGE_MAX_LINES <= 1_500 < 2_000
         assert html_mod.PAGE_MAX_BYTES <= 200_000 < 256_000
 
@@ -494,7 +494,7 @@ class TestIndex:
                     continue
                 target, _, fragment = href.partition("#")
                 target = target or name
-                if target.endswith(".css"):
+                if target.endswith((".css", ".json")):
                     assert (tmp_path / target).is_file()
                     continue
                 assert target in texts, f"{name} links to missing {target}"
@@ -558,7 +558,7 @@ class TestIndex:
         assert 'id="msg-1"' in _read(tmp_path / card.group(1))
         assert 'id="msg-0"' not in _read(tmp_path / card.group(1))
 
-    def test_files_are_published_pages_then_full_then_index(
+    def test_files_are_published_pages_then_full_then_map_then_index(
             self, tmp_path, monkeypatch):
         """The index is last so it never points at a file that is not there yet."""
         order = []
@@ -572,8 +572,109 @@ class TestIndex:
         _limits(monkeypatch, tokens=3000)
         render_html(_session(12), tmp_path)
         assert order[-1] == "index.html"
-        assert order[-2] == "full.html"
-        assert all(name.startswith(("page-", "xexport.")) for name in order[:-2])
+        assert order[-2] == "pages.json"
+        assert order[-3] == "full.html"
+        assert all(name.startswith(("page-", "xexport.")) for name in order[:-3])
+
+
+class TestPagesJson:
+    def test_the_map_as_data_matches_the_files_and_the_table(self, tmp_path,
+                                                             monkeypatch):
+        """pages.json is the page map an agent can always read whole. Every
+        number in it is measured on the file it describes."""
+        _limits(monkeypatch, tokens=3000)
+        s = _session(20, replies=2)
+        s.messages.insert(3, _tool("=" * 2500))     # one long line to flag
+        render_html(s, tmp_path)
+        data = json.loads(_read(tmp_path / "pages.json"))
+        pages = _pages(tmp_path)
+        assert data["layout"] == html_mod.HTML_LAYOUT
+        assert data["budget"] == {"tokens": 3000, "lines": 10**9, "bytes": 10**9}
+        assert data["pages"] == len(pages) == len(data["page_map"])
+        assert data["prompts"] == 20 and data["messages"] == 61
+        assert data["files"] == {"index": "index.html", "full": "full.html"}
+        anchors_seen = []
+        for row, page in zip(data["page_map"], pages):
+            text = _read(page)
+            assert row["file"] == page.name
+            assert row["lines"] == text.count("\n")
+            assert row["bytes"] == len(text.encode("utf-8"))
+            assert row["tokens"] == estimate_tokens(text)
+            assert row["longest"] == max(len(line) for line in text.split("\n"))
+            ids = _message_ids(text)
+            assert row["messages"] == [ids[0], ids[-1]]
+            anchors_seen.extend(ids)
+            assert row["oversize"] is False
+            assert (row["continues"] is None) == ("Continues prompt" not in text)
+        assert anchors_seen == list(range(61))
+        assert any(row["longest"] > 2400 for row in data["page_map"])
+        # One page per line, so a Grep for a page number finds its row.
+        lines = _read(tmp_path / "pages.json").split("\n")
+        rows = [line for line in lines if line.startswith('  {"page":')]
+        assert len(rows) == len(pages)
+
+    def test_oversize_pages_are_listed(self, tmp_path, monkeypatch):
+        _limits(monkeypatch, tokens=3000)
+        s = _session(2)
+        s.messages.insert(2, _tool("\n".join(f"line {i}" for i in range(2000))))
+        render_html(s, tmp_path)
+        data = json.loads(_read(tmp_path / "pages.json"))
+        flagged = [row["page"] for row in data["page_map"] if row["oversize"]]
+        assert data["oversize_pages"] == flagged and len(flagged) == 1
+        assert _is_oversize(_read(tmp_path / page_name(flagged[0])))
+
+    def test_the_map_is_small_however_long_the_session(self, tmp_path, monkeypatch):
+        def plain(path, value):
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(value)
+        monkeypatch.setattr(html_mod, "atomic_write_text", plain)
+        _limits(monkeypatch, nbytes=5000)
+        render_html(_session(300, reply="word " * 250), tmp_path)
+        text = _read(tmp_path / "pages.json")
+        assert json.loads(text)["pages"] == 300
+        assert len(text.encode("utf-8")) < 65_000
+
+
+class TestFirstExportCrash:
+    def test_a_crash_during_a_first_export_leaves_no_folder(self, claude_store,
+                                                            tmp_path, monkeypatch):
+        """what_bug_this_catches: a folder written without its marker can never be
+        verified, so every later run fails closed and writes a companion beside
+        it. On the first export there is nothing to protect, so the half-written
+        folder is removed instead."""
+        real = cli.render_html
+
+        def exploding(session, folder, **kwargs):
+            real(session, folder, **kwargs)
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cli, "render_html", exploding)
+        out = tmp_path / "exports"
+        r = _export(out)
+        assert r.exit_code != 0
+        assert not (out / "html").exists() or not list((out / "html").iterdir())
+
+        monkeypatch.setattr(cli, "render_html", real)
+        assert _export(out).exit_code == 0
+        assert len(list((out / "html").iterdir())) == 1
+
+    def test_a_crash_during_a_refresh_keeps_the_export(self, claude_store, tmp_path,
+                                                       monkeypatch):
+        out = tmp_path / "exports"
+        assert _export(out).exit_code == 0
+        folder = next((out / "html").iterdir())
+        before = sorted(p.name for p in folder.iterdir())
+
+        def exploding(session, folder, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cli, "render_html", exploding)
+        from conftest import _jsonl, claude_entries
+        _jsonl(claude_store / "projects" / "C--proj" / f"{CLAUDE_SESSION_ID}.jsonl",
+               claude_entries() + claude_entries()[2:4])
+        r = _export(out, "--mode", "append")
+        assert r.exit_code != 0
+        assert folder.is_dir() and sorted(p.name for p in folder.iterdir()) == before
 
 
 class TestEstimator:

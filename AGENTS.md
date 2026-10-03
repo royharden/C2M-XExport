@@ -56,7 +56,7 @@ browser DOM).
   resolution, jsonl → IR.
 - `src/xexport/render/` — `markdown.py`; `html.py` + `templates/` (adapted from
   claude-code-transcripts, Apache-2.0 — keep the NOTICE attribution). `html.py` writes
-  `page-NNN.html`, then `full.html`, then `index.html` last, plus the shared
+  `page-NNN.html`, then `full.html`, then `pages.json`, then `index.html` last, plus the shared
   `xexport.css` / `xexport.js`; it also owns the page budget, the token estimate and
   the layout version.
 - `scripts/validate_token_estimate.py` — dev-only: the calibration data for the token
