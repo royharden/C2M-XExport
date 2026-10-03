@@ -22,7 +22,8 @@ from xexport.model import (
 )
 from xexport.render import html as html_mod
 from xexport.render.html import (
-    estimate_tokens, layout_key, page_limits, page_name, render_html, token_weight,
+    _span, estimate_tokens, layout_key, page_limits, page_name, render_html,
+    token_weight,
 )
 
 from conftest import CLAUDE_SESSION_ID
@@ -593,6 +594,7 @@ class TestPagesJson:
         assert data["pages"] == len(pages) == len(data["page_map"])
         assert data["prompts"] == 20 and data["messages"] == 61
         assert data["files"] == {"index": "index.html", "full": "full.html"}
+        index = _read(tmp_path / "index.html")
         anchors_seen = []
         for row, page in zip(data["page_map"], pages):
             text = _read(page)
@@ -600,14 +602,22 @@ class TestPagesJson:
             assert row["lines"] == text.count("\n")
             assert row["bytes"] == len(text.encode("utf-8"))
             assert row["tokens"] == estimate_tokens(text)
-            assert row["longest"] == max(len(line) for line in text.split("\n"))
+            longest = max(len(line) for line in text.split("\n"))
+            assert row.get("longest") == (longest if longest > 2000 else None)
             ids = _message_ids(text)
             assert row["messages"] == [ids[0], ids[-1]]
             anchors_seen.extend(ids)
-            assert row["oversize"] is False
-            assert (row["continues"] is None) == ("Continues prompt" not in text)
+            assert "oversize" not in row
+            assert ("continues" in row) == ("Continues prompt" in text)
+            # The same row, as the index table shows it to a person.
+            cells = re.findall(r"<td>(.*?)</td>", re.search(
+                rf'<tr data-page="{row["page"]}">(.*?)</tr>', index).group(1))
+            assert cells[1] == _span(*row["prompts"], prefix="#")
+            assert cells[2] == _span(*row["messages"])
+            assert cells[3] == (row["first"] or "")[:19]
+            assert cells[4] == f"{row['lines']:,}" and cells[6] == f"{row['tokens']:,}"
         assert anchors_seen == list(range(61))
-        assert any(row["longest"] > 2400 for row in data["page_map"])
+        assert any(row.get("longest", 0) > 2400 for row in data["page_map"])
         # One page per line, so a Grep for a page number finds its row.
         lines = _read(tmp_path / "pages.json").split("\n")
         rows = [line for line in lines if line.startswith('  {"page":')]
@@ -619,9 +629,29 @@ class TestPagesJson:
         s.messages.insert(2, _tool("\n".join(f"line {i}" for i in range(2000))))
         render_html(s, tmp_path)
         data = json.loads(_read(tmp_path / "pages.json"))
-        flagged = [row["page"] for row in data["page_map"] if row["oversize"]]
+        flagged = [row["page"] for row in data["page_map"] if row.get("oversize")]
         assert data["oversize_pages"] == flagged and len(flagged) == 1
         assert _is_oversize(_read(tmp_path / page_name(flagged[0])))
+
+    def test_the_header_counts_what_was_drawn(self, tmp_path):
+        """A privacy filter must not be visible as a count of what it removed."""
+        s = Session(source="claude", session_id="x", app="Claude Code", title="t")
+        s.messages = [_tool("before"), _user("one"), _assistant("a"),
+                      _tool("mid"), _user("two"), _assistant("b")]
+        render_html(s, tmp_path, include_tools=False)
+        data = json.loads(_read(tmp_path / "pages.json"))
+        assert data["messages"] == 4 and data["prompts"] == 2
+        assert data["page_map"][0]["messages"] == [1, 5]
+        assert "before" not in _read(tmp_path / "pages.json")
+
+    def test_the_map_is_not_rewritten_when_nothing_changed(self, tmp_path, monkeypatch):
+        render_html(_session(3), tmp_path)
+        written = []
+        monkeypatch.setattr(html_mod, "atomic_write_text",
+                            lambda path, value: written.append(Path(path).name))
+        render_html(_session(3), tmp_path)
+        assert "pages.json" not in written and "page-001.html" not in written
+        assert "index.html" in written
 
     def test_the_map_is_small_however_long_the_session(self, tmp_path, monkeypatch):
         def plain(path, value):
@@ -629,10 +659,12 @@ class TestPagesJson:
                 f.write(value)
         monkeypatch.setattr(html_mod, "atomic_write_text", plain)
         _limits(monkeypatch, nbytes=5000)
-        render_html(_session(300, reply="word " * 250), tmp_path)
+        render_html(_session(200, reply="word " * 250), tmp_path)
         text = _read(tmp_path / "pages.json")
-        assert json.loads(text)["pages"] == 300
-        assert len(text.encode("utf-8")) < 65_000
+        assert json.loads(text)["pages"] == 200
+        # The promise the docs make: one read for a session of up to about 200
+        # pages, by the same estimate the pages are budgeted with.
+        assert estimate_tokens(text) < 25_000
 
 
 class TestFirstExportCrash:
@@ -650,13 +682,29 @@ class TestFirstExportCrash:
 
         monkeypatch.setattr(cli, "render_html", exploding)
         out = tmp_path / "exports"
+        bystander = out / "html" / "someone else -- their chat -- claude-other"
+        bystander.mkdir(parents=True)
+        (bystander / "index.html").write_text("theirs", encoding="utf-8")
         r = _export(out)
         assert r.exit_code != 0
-        assert not (out / "html").exists() or not list((out / "html").iterdir())
+        assert [p.name for p in (out / "html").iterdir()] == [bystander.name]
+        assert (bystander / "index.html").read_text(encoding="utf-8") == "theirs"
 
         monkeypatch.setattr(cli, "render_html", real)
         assert _export(out).exit_code == 0
-        assert len(list((out / "html").iterdir())) == 1
+        assert len(list((out / "html").iterdir())) == 2
+
+    def test_a_ctrl_c_during_a_first_export_cleans_up_too(self, claude_store,
+                                                          tmp_path, monkeypatch):
+        def interrupted(session, folder, **kwargs):
+            (folder / "page-001.html").write_text("half", encoding="utf-8")
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(cli, "render_html", interrupted)
+        out = tmp_path / "exports"
+        r = _export(out)
+        assert r.exit_code != 0
+        assert not list((out / "html").iterdir())
 
     def test_a_crash_during_a_refresh_keeps_the_export(self, claude_store, tmp_path,
                                                        monkeypatch):
@@ -839,6 +887,26 @@ class TestLayoutUpgrade:
         assert {p.name: _read(p) for p in folder.glob("*.html")} == before
         assert not (folder / "full.html").exists()
         assert len(list((out / "html").iterdir())) == 2      # one companion, once
+
+    def test_a_layout_2_export_gains_pages_json_on_refresh(self, claude_store, tmp_path):
+        """0.3.0 wrote layout 2: no pages.json, a 20,000-token budget."""
+        out = tmp_path / "exports"
+        assert _export(out).exit_code == 0
+        folder = next((out / "html").iterdir())
+        marker = folder / cursors.HTML_CURSOR_NAME
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        data["layout"] = "2:20000/1500/200000"
+        data["tool"] = "0.3.0"
+        marker.write_text(json.dumps(data), encoding="utf-8")
+        (folder / "pages.json").unlink()
+
+        r = _export(out, "--mode", "append")
+        assert r.exit_code == 0 and "Updated" in r.output
+        assert (folder / "pages.json").is_file()
+        assert cursors.read_html_marker(folder)["layout"] == layout_key()
+        assert layout_key().startswith("3:")
+        r = _export(out, "--mode", "append")
+        assert "Up to date" in r.output
 
     def test_markdown_records_carry_no_layout(self, claude_store, tmp_path):
         out = tmp_path / "exports"

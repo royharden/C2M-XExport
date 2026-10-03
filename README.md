@@ -110,11 +110,14 @@ so 25,000 tokens is only 50 to 65 KB.
   page.
 - **`pages.json`** is the page map as data: a short header (layout, version, budget,
   session, counts, which pages are oversize) and one JSON object per page on its own
-  line (`{"page":7,"file":"page-007.html","prompts":[10,11],"messages":[72,83],
-  "first":"…","lines":316,"bytes":37229,"tokens":18709,"longest":1062,"oversize":false,
-  "continues":null}`). About 200 bytes a page, so it is one read for any session up to
-  a few hundred pages, and it can be parsed instead of scraped. The index holds the same
-  map as a table for people.
+  line (`{"page":4,"file":"page-004.html","prompts":[6,7],"messages":[40,58],
+  "first":"2026-01-02T10:00:00.000Z","lines":280,"bytes":31000,"tokens":15500}`, with
+  `longest`, `oversize` and `continues` only on the rows they apply to). About 170 bytes
+  a page, so it is one read for a session of up to about 200 pages (the header's `pages`
+  says how many there are; past that, search it for `"page":N,`), and it can be parsed
+  instead of scraped. The index holds the same map as a table for people. `prompts` in
+  the header is the number of prompt cards, which is also the number of prompt groups
+  the pages are cut between.
 - Past 999 pages the name simply grows (`page-1000.html`), so page order comes from the
   page map, not from sorting file names.
 - The index and the pages share `xexport.css` and `xexport.js`; `full.html` carries its
@@ -154,9 +157,13 @@ An export written by an earlier version is re-laid-out in place the next time th
 session is exported: 0.2.3 and before had five prompts per page and no `full.html`;
 0.3.0 had a 20,000-token budget and no `pages.json`. The reverse is not clean:
 an older CLI refreshing a 0.3.0 export rewrites the index and pages in the old layout
-and leaves `full.html` behind, stale. Upgrade the installed CLI everywhere an export is
-refreshed. An index with no page map at its top marks a folder last written by an older
+and leaves `full.html` and `pages.json` behind, stale. Upgrade the installed CLI
+everywhere an export is refreshed. An index with no page map at its top marks a folder last written by an older
 version.
+
+If a session's first HTML export fails part-way (a crash, a Ctrl-C), the folder it was
+writing is removed, so the next run starts clean rather than forking a companion beside
+an unverifiable folder. A failed refresh leaves the existing export as it was.
 
 Markdown images in a prompt, answer or thinking block are rendered as images, so
 opening an export loads them from their URLs, which tells whoever hosts one that the

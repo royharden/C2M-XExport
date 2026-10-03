@@ -126,7 +126,7 @@ Every part of that command line is load-bearing:
   and writes the older layout (five prompts per page, no `full.html`). After upgrading
   the CLI, existing HTML exports are re-laid-out the next time each session is exported.
   Do not let two CLI versions refresh the same export: an older one rewrites the index
-  and pages and leaves the newer one's `full.html` behind, stale.
+  and pages and leaves the newer one's `full.html` and `pages.json` behind, stale.
 - The page budget can be moved with `XEXPORT_PAGE_MAX_TOKENS`, `XEXPORT_PAGE_MAX_LINES`
   and `XEXPORT_PAGE_MAX_BYTES`. If you set one, set it where the hook process sees it:
   an export is re-laid-out whenever the budget it was written with differs from the

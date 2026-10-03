@@ -537,7 +537,7 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
         nbytes, newlines, tokens = _size(html)
         longest = max(len(line) for line in html.split("\n"))
         drawn = [f.anchor for f in page.fragments]
-        records.append({
+        record = {
             "page": page.number,
             "file": page_name(page.number),
             "prompts": [page.prompts[0], page.prompts[-1]] if page.prompts else None,
@@ -546,10 +546,16 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
             "lines": newlines,
             "bytes": nbytes,
             "tokens": math.ceil(tokens),
-            "longest": longest,
-            "oversize": page.oversize,
-            "continues": page.continues or None,
-        })
+        }
+        # Only the rows that need them carry the flags: every byte of a row is
+        # paid for once per page by every reader of the map.
+        if longest > LONG_LINE_CHARS:
+            record["longest"] = longest
+        if page.oversize:
+            record["oversize"] = True
+        if page.continues:
+            record["continues"] = page.continues
+        records.append(record)
         page_map.append({
             "number": page.number,
             "href": page_name(page.number),
@@ -617,8 +623,9 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
     # ---- pages.json: the page map as data, one page per line
     # The index of a long session is more than one read, so the map it opens
     # with has to be fetched by range or search. This file is the same map,
-    # small enough to read whole at any session length and parsed rather than
-    # scraped. One line per page keeps it greppable too.
+    # parsed rather than scraped, and about 170 bytes a page, so it is one read
+    # for a session of up to about 200 pages. One line per page keeps it
+    # greppable past that.
     manifest = {
         "layout": HTML_LAYOUT,
         "xexport": __version__,
@@ -630,7 +637,7 @@ def render_html(session: Session, out_dir: Path, *, brief: bool = False,
         "pages": total_pages,
         "prompts": len(groups),
         "messages": drawn_count,
-        "oversize_pages": [r["page"] for r in records if r["oversize"]],
+        "oversize_pages": [r["page"] for r in records if r.get("oversize")],
         "files": {"index": "index.html", "full": "full.html"},
     }
     head = json.dumps(manifest, ensure_ascii=False, indent=1)

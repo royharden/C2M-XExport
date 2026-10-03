@@ -19,7 +19,7 @@ level makes the Markdown files hard to find.
 | `index.html` | A page map at the top (each page's prompts, message anchors, first timestamp, lines, KB, estimated tokens), then one card per prompt. |
 | `page-NNN.html` | The complete content, cut by size so that one page is one whole read for an agent's file-read tool: at most 17,000 estimated tokens, 1,500 lines or 200 KB. Nothing is truncated; a single message larger than a page gets its own page, marked oversize. |
 | `full.html` | Every message in one file, with the same `#msg-N` anchors. For searching and skimming; too large to read whole on a long session. |
-| `pages.json` | The page map as data: a header, then one JSON object per page on its own line. Small at any session length (0.3.1 and later). |
+| `pages.json` | The page map as data: a header, then one JSON object per page on its own line. One read for a session of up to about 200 pages (0.3.1 and later). |
 | `xexport.css`, `xexport.js` | Styling shared by the index and the pages. `full.html` carries its own copy, so it can be sent on its own. |
 | `.xexport-cursor.json` | xexport's record of what the export was made from. Leave it alone. |
 

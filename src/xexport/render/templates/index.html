@@ -4,7 +4,7 @@
 {% block content %}
         <h1>{{ session.title }}</h1>
         <p class="subtitle">{{ session.app }} transcript{% if session.cwd %} · <code>{{ session.cwd }}</code>{% endif %}</p>
-        <p class="page-note">Page map. Each page-NNN.html holds the complete content of its prompts and is sized to fit one whole-file read (at most about {{ limits.tokens }} estimated tokens, {{ limits.lines }} lines, {{ limits.bytes // 1000 }} KB). <a href="full.html">full.html</a> is everything in one file, for searching rather than reading whole. <a href="pages.json">pages.json</a> is this map as data, one page per line, small enough to read whole however long the session. The cards below this map are a summary: one per prompt.</p>
+        <p class="page-note">Page map. Each page-NNN.html holds the complete content of its prompts and is sized to fit one whole-file read (at most about {{ limits.tokens }} estimated tokens, {{ limits.lines }} lines, {{ limits.bytes // 1000 }} KB). <a href="full.html">full.html</a> is everything in one file, for searching rather than reading whole. <a href="pages.json">pages.json</a> is this map as data, one page per line, one read for a session of up to about 200 pages. The cards below this map are a summary: one per prompt.</p>
         <table class="page-map">
         <tr><th>Page</th><th>Prompts</th><th>#msg-N</th><th>First timestamp</th><th>Lines</th><th>KB</th><th>Est. tokens</th><th>Note</th></tr>
 {% for p in page_map %}

@@ -450,7 +450,17 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
             return index_path, "updated", f"{total} messages, refresh {run}"
 
     html_dir.mkdir(parents=True, exist_ok=True)
-    folder = unique_path(html_dir, name)
+    while True:
+        folder = unique_path(html_dir, name)
+        try:
+            # Claim the folder by creating it, so that the clean-up below can
+            # only ever remove a folder this run made. Two runs that chose the
+            # same new name would otherwise share it, and one's failure would
+            # take the other's export with it.
+            folder.mkdir()
+            break
+        except FileExistsError:
+            continue
     if opt.mode != "new" and not refused and folder.name != name:
         _warn(f"Warning: {name}\\ already exists but could not be refreshed; "
               f"wrote {folder.name}\\ instead.")
@@ -460,11 +470,12 @@ def _export_html(session: Session, opt: Options, name: str, html_dir: Path) -> t
             session, messages=total, run=1, opts=opt.html_opts_fingerprint,
             forked=refused, layout=layout_key()))
     except BaseException:
-        # This folder did not exist before this run. Left half-written and
-        # without its marker, it can never be verified, so the next run would
-        # fail closed and write a companion beside it, for good. Remove what
-        # this run made and let the next run start clean. A refresh is not
-        # treated this way: its folder holds an export worth keeping.
+        # This run created this folder. Left half-written and without its
+        # marker, it can never be verified, so the next run would fail closed
+        # and write a companion beside it, for good. Remove what this run made
+        # and let the next run start clean. A refresh is not treated this way:
+        # its folder holds an export worth keeping. BaseException, so that a
+        # Ctrl-C mid-export cleans up too.
         shutil.rmtree(folder, ignore_errors=True)
         raise
     return index_path, "wrote", ""

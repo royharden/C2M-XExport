@@ -45,7 +45,7 @@ same conversation.
 | `index.html` | A page map, then one card per user prompt (the prompt, tool counts, the closing answer). | Take the page map from its top. Do not try to read it whole on a long session. |
 | `page-NNN.html` | The complete content of a run of messages: prompts, answers, thinking, tool calls, tool results. | Read whole. Each is sized to fit one read. |
 | `full.html` | Every message of every page in one continuous file. | Search it. Do not read it whole. |
-| `pages.json` | The page map as data (xexport 0.3.1 and later): a header, then one JSON object per page on its own line. | Read it whole; it is small at any session length. |
+| `pages.json` | The page map as data (xexport 0.3.1 and later): a header, then one JSON object per page on its own line. | Read it whole up to about 200 pages (the header's `pages` says); past that, search it for `"page":N,`. A complete read ends with `]` and `}`. |
 | `<name>.md` | The whole conversation as one Markdown file. Long tool output is cut to 2,000 characters unless it was exported with `--full`. | Fine to read whole when small; slice it when large. |
 
 ### The sizing contract (xexport 0.3.0 and later)
@@ -78,12 +78,16 @@ the folder.
 
 ## Reading an HTML export
 
-1. **Take the page map.** If the folder has `pages.json`, read that whole: a header
-   (budget, counts, `oversize_pages`) and then one object per page on its own line with
-   `file`, `prompts` (first and last prompt number), `messages` (first and last `#msg-N`
-   anchor), `first` (timestamp), `lines`, `bytes`, `tokens`, `longest` (line length),
-   `oversize` and `continues` (the prompt it continues, or null). A Grep for
-   `"page":7,` returns just page 7's row.
+1. **Take the page map.** If `index.html` links `pages.json` (search it for
+   `href="pages.json"`; a `pages.json` in a folder whose index does not link it is a
+   leftover from a newer version and is stale), read `pages.json`: a header (budget,
+   counts, `oversize_pages`) and then one object per page on its own line with `file`,
+   `prompts` (first and last prompt number), `messages` (first and last `#msg-N`
+   anchor), `first` (timestamp), `lines`, `bytes`, `tokens`, and only where they apply
+   `longest` (a line over 2,000 characters), `oversize` and `continues` (the prompt it
+   continues). It is one read up to about 200 pages; check `pages` in the header, and
+   past that search it: a Grep for `"page":7,` returns just page 7's row. A complete
+   read ends with `]` and `}`.
    Without `pages.json`, the same map is a table near the top of `index.html`,
    starting around line 14, one line per page. Get it with a **ranged** read (the first
    150 lines; continue until you pass `</table>`), or by searching `index.html` for
@@ -229,8 +233,8 @@ index last, so it tells you which version last wrote the folder. In such a folde
   and slice it when it is absent;
 - `index.html` lists every page number in its navigation and has no size information;
 - anchors (`#msg-N`) work the same way;
-- **a `full.html`, `xexport.css` or `xexport.js` in the folder is a leftover and must
-  not be used.** It happens when a newer xexport wrote the folder and an older one
+- **a `full.html`, `pages.json`, `xexport.css` or `xexport.js` in the folder is a
+  leftover and must not be used.** It happens when a newer xexport wrote the folder and an older one
   refreshed it afterwards: the older one rewrites the index and pages and leaves
   `full.html` as it was, still calling itself the complete transcript and missing
   everything since.
